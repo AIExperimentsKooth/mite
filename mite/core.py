@@ -1,3 +1,6 @@
+"""Core interaction loop for Mite.
+Handles the model chat loop with robust parsing for small models.
+"""
 import re
 import json
 import sys
@@ -21,7 +24,6 @@ _HISTSIZE = 100
 
 
 def _setup_readline():
-    """Enable readline for arrow-key history prefilling on input()."""
     try:
         readline.set_history_length(_HISTSIZE)
         if os.path.exists(_HISTFILE):
@@ -31,7 +33,6 @@ def _setup_readline():
         pass
 
 
-# --- Userdata directory (~/.mite) ---
 _USERDATA_DIR = os.path.expanduser("~/.mite")
 _CONVERSATIONS_DIR = os.path.join(_USERDATA_DIR, "conversations")
 _CONFIG_FILE = os.path.join(_USERDATA_DIR, "config.json")
@@ -430,77 +431,56 @@ def _detect_finish_or_question(text: str) -> str:
 
 def _process_user_task(user_input: str, history: list, model: str, host: str,
                        system_prompt: str, auto_continue: bool) -> bool:
-    """Run a single task through the model loop.
-
-    Injects user_input into history with AGENT.md augmentation, runs the
-    model loop with auto-follow-up and auto-continue, and returns True
-    if TOOL finish was called (caller should exit), False otherwise.
-    """
     agent_content = _load_agent_md()
     if agent_content:
         augmented = f"[AGENT.md instructions]\n{agent_content}\n\n[Task]\n{user_input}"
     else:
         augmented = user_input
-
     history.append({"role": "user", "content": augmented})
-
     max_auto_steps = 20 if auto_continue else 5
     auto_steps_remaining = max_auto_steps
-
     while True:
         messages = prompts.build_prompt(history, system_prompt=system_prompt)
-
         print(f"  \u23f3", end="", flush=True)
         start_time = time.time()
         response = _call_ollama(messages, model, host)
-
         if response is None:
             print("")
             history.pop()
             return False
-
         elapsed = time.time() - start_time
         print(f" ({elapsed:.1f}s)")
-
         tool_call = _parse_tool_call(response)
-
         if tool_call:
             tool_name = tool_call["tool"]
             tool_args = tool_call["args"]
             thought = tool_call.get("thought", "")
-
             if thought:
                 print(f"  \U0001f4ad {thought[:200]}")
-
             if tool_name == "finish":
                 msg = tool_args.get("message", "")
                 print(f"\n  \u2705 {msg}" if msg else "\n  \u2705 Done!")
                 history.append({"role": "assistant", "content": response.strip()})
                 return True
-
             print(f"  \U0001f527 {tool_name}({_args_str(tool_args)})")
             result = tools.execute_tool(tool_name, tool_args)
             print(f"\n{result[:1200]}")
-
             history.append({"role": "assistant", "content": response.strip()})
             truncated = result[:800]
             if len(result) > 800:
                 truncated += "\n... (truncated)"
             history.append({"role": "system", "content": f"Result:\n{truncated}"})
             _trim_history(history)
-
             auto_steps_remaining -= 1
             if auto_steps_remaining <= 0:
                 if auto_continue:
                     print(f"  \u26a0 Auto-continue limit ({max_auto_steps} steps) reached.")
                 break
             continue
-
         else:
             print(f"\n{response.strip()[:800]}")
             history.append({"role": "assistant", "content": response.strip()})
             _trim_history(history)
-
             if auto_continue:
                 signal = _detect_finish_or_question(response)
                 if signal == "finish":
@@ -527,17 +507,11 @@ def _process_user_task(user_input: str, history: list, model: str, host: str,
                         print("  \u26a0 Agent seems stuck (3+ responses without action).")
                         break
                     print("  \u23e9 (auto-continue)")
-                    continue_prompt = (
-                        "continue. "
-                        "Use TOOL read_file, write_file, patch, shell, or search to make progress. "
-                        "When the task is complete, use TOOL finish."
-                    )
-                    history.append({"role": "user", "content": continue_prompt})
+                    history.append({"role": "user", "content": prompts.CONTINUE_PROMPT})
                     _trim_history(history)
                     continue
             else:
                 break
-
     return False
 
 
@@ -738,7 +712,6 @@ def run_loop(model: str, host: str, initial_task: str = None, show_sysinfo: bool
                         print(f"  auto_continue {'enabled' if auto_continue else 'disabled'}")
                     continue
 
-                # --- Task queue commands ---
                 elif cmd == "queue" or cmd.startswith("queue "):
                     qargs = cmd[6:].strip() if len(cmd) > 6 else ""
                     if qargs.startswith("add "):
@@ -809,7 +782,6 @@ def run_loop(model: str, host: str, initial_task: str = None, show_sysinfo: bool
                         print("  Subcommands: add, list, remove <id>, clear, start, stop")
                     continue
 
-                # --- Schedule commands ---
                 elif cmd == "schedule" or cmd.startswith("schedule "):
                     sargs = cmd[9:].strip() if len(cmd) > 9 else ""
                     if sargs.startswith("add "):
