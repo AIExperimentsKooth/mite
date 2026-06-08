@@ -15,7 +15,7 @@ $ mite "add error handling to main.py"
 
 ## Features
 
-- 🪶 **Ultra-lightweight** — works with Qwen2.5:0.5B (500M params), runs on 4GB RAM
+- 🪆 **Ultra-lightweight** — works with Qwen2.5:0.5B (500M params), runs on 4GB RAM
 - 🤖 **Any Ollama model** — use whatever model you have: qwen2.5, llama3.2, phi, gemma
 - 🔧 **Full tool set** — read, write, edit files, run shell commands, search code
 - 🚀 **Auto-configures** — one command installs everything
@@ -26,6 +26,8 @@ $ mite "add error handling to main.py"
 - 📋 **AGENT.md support** — persistent instructions at project or user level
 - 🧩 **Single python package** — easy to hack on
 - ⏩ **Auto-continue** — agent keeps working autonomously until done or stuck
+- 📋 **Task queue** — queue tasks to run in sequence
+- ⏰ **Recurring schedule** — schedule tasks at intervals (e.g., every 30m)
 
 ## Quick Install
 
@@ -91,7 +93,7 @@ mite --update
 bash update.sh
 
 # For private repos, provide a GitHub token:
-MITE_TOKEN=ghp_xxx mite --update
+MITE_TOKEN=*** mite --update
 ```
 
 The update script:
@@ -143,6 +145,59 @@ mite --no-auto-continue
 /config auto_continue false
 ```
 
+### Task Queue & Schedule
+
+Mite includes a built-in task manager for queuing and scheduling tasks:
+
+**Sequential Queue** — add tasks to a queue and run them one after another:
+
+```bash
+# Add tasks to the queue
+/queue add check if python is installed
+/queue add list all files in src/
+/queue add write summary.txt
+
+# Process the queue (runs tasks sequentially)
+/queue start
+
+# Manage the queue
+/queue list        # Show all tasks with status
+/queue remove 2    # Remove task #2 from queue
+/queue clear       # Clear entire queue
+/queue stop        # Stop processing mid-queue
+```
+
+**Recurring Schedule** — schedule tasks to run at intervals:
+
+```bash
+# Schedule a task every 30 minutes
+/schedule add 30m check disk usage
+
+# Schedule a task every hour
+/schedule add 1h backup database
+
+# Schedule a task every 2 hours 30 minutes
+/schedule add 2h30m run health check
+
+# Manage schedule
+/schedule list         # Show all scheduled tasks
+/schedule pause 1      # Pause schedule #1 (skip runs)
+/schedule resume 1     # Resume schedule #1
+/schedule remove 1     # Remove schedule #1
+/schedule clear        # Clear all scheduled tasks
+```
+
+**Supported interval formats**: `30m`, `1h`, `2h30m`, `1d`, `3600` (seconds), `every 30 minutes`
+
+When a scheduled task is due, Mite prompts you before running it:
+
+```
+  ⏰ Scheduled task due: "check disk usage" (every 30m)
+     Run now? [Y/n]
+```
+
+Queued and scheduled tasks persist in `~/.mite/queue.json` and `~/.mite/schedule.json` — they survive restarts and power loss.
+
 ### Userdata Directory (`~/.mite/`)
 
 Mite stores your data in `~/.mite/`:
@@ -150,6 +205,8 @@ Mite stores your data in `~/.mite/`:
 | Path | Description |
 |------|-------------|
 | `~/.mite/config.json` | Preferences (model, show_sysinfo, auto_continue) — set via `/config` |
+| `~/.mite/queue.json` | Task queue — managed via `/queue` |
+| `~/.mite/schedule.json` | Scheduled tasks — managed via `/schedule` |
 | `~/.mite/conversations/` | Saved conversations — use `/save` and `/load` |
 | `~/.mite/AGENT.md` | User-level persistent instructions — loaded on every prompt |
 | `~/.mite_history` | Arrow-key command history |
@@ -210,10 +267,11 @@ mite/
 │   ├── __init__.py    # Package metadata
 │   ├── __main__.py    # python -m mite
 │   ├── cli.py         # CLI argument parsing + auto-setup
-│   ├── core.py        # Main interaction loop
+│   ├── core.py        # Main interaction loop + command handlers
 │   ├── tools.py       # File/shell/search tool implementations
 │   ├── prompts.py     # System prompts optimized for small models
-│   └── setup.py       # Ollama install + model pull
+│   ├── setup.py       # Ollama install + model pull
+│   └── task_manager.py # Task queue + schedule management
 ├── update.sh           # Self-update script (backup → clone → restore)
 ├── setup.sh            # One-click setup script
 └── README.md

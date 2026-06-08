@@ -12,13 +12,16 @@ import urllib.request
 import traceback
 from . import prompts
 from . import tools
+from .task_manager import TaskQueue, TaskSchedule, parse_interval, format_interval
 
 
+# --- Readline history (up/down arrow key support) ---
 _HISTFILE = os.path.expanduser("~/.mite_history")
 _HISTSIZE = 100
 
 
 def _setup_readline():
+    """Enable readline for arrow-key history prefilling on input()."""
     try:
         readline.set_history_length(_HISTSIZE)
         if os.path.exists(_HISTFILE):
@@ -28,6 +31,7 @@ def _setup_readline():
         pass
 
 
+# --- Userdata directory (~/.mite) ---
 _USERDATA_DIR = os.path.expanduser("~/.mite")
 _CONVERSATIONS_DIR = os.path.join(_USERDATA_DIR, "conversations")
 _CONFIG_FILE = os.path.join(_USERDATA_DIR, "config.json")
@@ -151,6 +155,12 @@ def _parse_tool_call_singleline(text: str) -> dict | None:
     if len(tokens) < 2:
         return None
     tool_name = tokens[1].lower().strip()
+    TOOL_NAME_ALIASES = {
+        "write": "write_file", "read": "read_file", "edit": "patch",
+        "replace": "patch", "run": "shell", "exec": "shell",
+        "find": "search", "grep": "search",
+    }
+    tool_name = TOOL_NAME_ALIASES.get(tool_name, tool_name)
     valid_tools = set(tools.TOOLS.keys())
     if tool_name not in valid_tools:
         if tool_name.endswith(":") or tool_name.endswith("."):
@@ -159,16 +169,9 @@ def _parse_tool_call_singleline(text: str) -> dict | None:
             return None
     args = {}
     ARG_ALIASES = {
-        "old": "old_string",
-        "new": "new_string",
-        "cmd": "command",
-        "glob": "file_glob",
-        "max": "limit",
-        "msg": "message",
-        "file": "path",
-        "dir": "path",
-        "folder": "path",
-        "directory": "path",
+        "old": "old_string", "new": "new_string", "cmd": "command",
+        "glob": "file_glob", "max": "limit", "msg": "message",
+        "file": "path", "dir": "path", "folder": "path", "directory": "path",
     }
     i = 2
     while i < len(tokens):
@@ -264,8 +267,16 @@ def _parse_tool_call(text: str) -> dict | None:
             return result
     text_stripped = text.strip()
     if text_stripped and "=" in text_stripped:
-        first_word = text_stripped.split()[0].lower().rstrip(":")
-        if first_word in tools.TOOLS:
+        first_word = text_stripped.split()[0].lower().rstrip(":").rstrip(",")
+        TOOL_ALIASES = {
+            "write": "write_file", "read": "read_file", "edit": "patch",
+            "replace": "patch", "run": "shell", "cmd": "shell",
+            "command": "shell", "exec": "shell", "find": "search",
+            "grep": "search", "search": "search",
+        }
+        normalized = TOOL_ALIASES.get(first_word, first_word)
+        valid_tools = set(tools.TOOLS.keys())
+        if normalized in valid_tools or first_word in valid_tools:
             result = _parse_tool_call_singleline("TOOL " + text_stripped)
             if result:
                 return result
@@ -392,8 +403,8 @@ def _detect_finish_or_question(text: str) -> str:
         return "continue"
     text_lower = text.strip().lower()
     finish_patterns = [
-        r'\b(the task|the work|everything|this)\s+(is|has been)\s+(complete|completed|done|finished)',
-        r'\bi(\'ve| have)\s+(finished|completed|done|accomplished)',
+        r'\b(the task|the work|everything|this)\\s+(is|has been)\\s+(complete|completed|done|finished)',
+        r'\bi(\'ve| have)\\s+(finished|completed|done|accomplished)',
         r'\b(task|work).*complete',
         r'\ball\s+(done|set|finished|complete)',
         r'\bdone\s*[\.!]*\s*$',
@@ -417,6 +428,119 @@ def _detect_finish_or_question(text: str) -> str:
     return "continue"
 
 
+def _process_user_task(user_input: str, history: list, model: str, host: str,
+                       system_prompt: str, auto_continue: bool) -> bool:
+    """Run a single task through the model loop.
+
+    Injects user_input into history with AGENT.md augmentation, runs the
+    model loop with auto-follow-up and auto-continue, and returns True
+    if TOOL finish was called (caller should exit), False otherwise.
+    """
+    agent_content = _load_agent_md()
+    if agent_content:
+        augmented = f"[AGENT.md instructions]\n{agent_content}\n\n[Task]\n{user_input}"
+    else:
+        augmented = user_input
+
+    history.append({"role": "user", "content": augmented})
+
+    max_auto_steps = 20 if auto_continue else 5
+    auto_steps_remaining = max_auto_steps
+
+    while True:
+        messages = prompts.build_prompt(history, system_prompt=system_prompt)
+
+        print(f"  \u23f3", end="", flush=True)
+        start_time = time.time()
+        response = _call_ollama(messages, model, host)
+
+        if response is None:
+            print("")
+            history.pop()
+            return False
+
+        elapsed = time.time() - start_time
+        print(f" ({elapsed:.1f}s)")
+
+        tool_call = _parse_tool_call(response)
+
+        if tool_call:
+            tool_name = tool_call["tool"]
+            tool_args = tool_call["args"]
+            thought = tool_call.get("thought", "")
+
+            if thought:
+                print(f"  \U0001f4ad {thought[:200]}")
+
+            if tool_name == "finish":
+                msg = tool_args.get("message", "")
+                print(f"\n  \u2705 {msg}" if msg else "\n  \u2705 Done!")
+                history.append({"role": "assistant", "content": response.strip()})
+                return True
+
+            print(f"  \U0001f527 {tool_name}({_args_str(tool_args)})")
+            result = tools.execute_tool(tool_name, tool_args)
+            print(f"\n{result[:1200]}")
+
+            history.append({"role": "assistant", "content": response.strip()})
+            truncated = result[:800]
+            if len(result) > 800:
+                truncated += "\n... (truncated)"
+            history.append({"role": "system", "content": f"Result:\n{truncated}"})
+            _trim_history(history)
+
+            auto_steps_remaining -= 1
+            if auto_steps_remaining <= 0:
+                if auto_continue:
+                    print(f"  \u26a0 Auto-continue limit ({max_auto_steps} steps) reached.")
+                break
+            continue
+
+        else:
+            print(f"\n{response.strip()[:800]}")
+            history.append({"role": "assistant", "content": response.strip()})
+            _trim_history(history)
+
+            if auto_continue:
+                signal = _detect_finish_or_question(response)
+                if signal == "finish":
+                    print("  (auto-continue: model signaled completion)")
+                    break
+                elif signal == "question":
+                    print("  (auto-continue: waiting for your response)")
+                    break
+                else:
+                    auto_steps_remaining -= 1
+                    if auto_steps_remaining <= 0:
+                        print(f"  \u26a0 Auto-continue limit ({max_auto_steps} steps) reached.")
+                        break
+                    recent_nl = 0
+                    for m in reversed(history):
+                        if m["role"] == "assistant":
+                            if not _parse_tool_call(m["content"]):
+                                recent_nl += 1
+                            else:
+                                break
+                            if recent_nl >= 3:
+                                break
+                    if recent_nl >= 3:
+                        print("  \u26a0 Agent seems stuck (3+ responses without action).")
+                        break
+                    print("  \u23e9 (auto-continue)")
+                    continue_prompt = (
+                        "continue. "
+                        "Use TOOL read_file, write_file, patch, shell, or search to make progress. "
+                        "When the task is complete, use TOOL finish."
+                    )
+                    history.append({"role": "user", "content": continue_prompt})
+                    _trim_history(history)
+                    continue
+            else:
+                break
+
+    return False
+
+
 def run_loop(model: str, host: str, initial_task: str = None, show_sysinfo: bool = True, auto_continue: bool = True):
     _setup_readline()
     _ensure_userdata_dir()
@@ -429,6 +553,12 @@ def run_loop(model: str, host: str, initial_task: str = None, show_sysinfo: bool
     if "auto_continue" in config:
         raw = config["auto_continue"]
         auto_continue = raw if isinstance(raw, bool) else str(raw).lower() in ("true", "1", "yes")
+
+    task_queue = TaskQueue()
+    task_schedule = TaskSchedule()
+    pending_count = task_queue.count_pending()
+    schedule_count = len(task_schedule.list())
+
     history = []
     last_prompt = ""
     step = 0
@@ -437,6 +567,7 @@ def run_loop(model: str, host: str, initial_task: str = None, show_sysinfo: bool
     _sysinfo_str = f"\n[System information]\n{sysinfo}\n" if sysinfo else ""
     system_prompt = prompts.SYSTEM_PROMPT + _sysinfo_str
     convo_count = len(_list_conversations())
+
     print(f"\n  \U0001f916 Mite active | model: {model}")
     if agent_md_active:
         print(f"  \U0001f4cb AGENT.md loaded (re-reads on every prompt)")
@@ -445,14 +576,43 @@ def run_loop(model: str, host: str, initial_task: str = None, show_sysinfo: bool
         for line in sysinfo.splitlines():
             print(f"     {line}")
     if auto_continue:
-        print(f"  \u23e9 Auto-continue ON  — agent keeps working until done or stuck")
+        print(f"  \u23e9 Auto-continue ON  \u2014 agent keeps working until done or stuck")
+    if pending_count:
+        print(f"  \U0001f4cb {pending_count} task{'s' if pending_count != 1 else ''} queued  (\u2014 /queue list)")
+    if schedule_count:
+        print(f"  \U0001f4c5 {schedule_count} scheduled task{'s' if schedule_count != 1 else ''} (\u2014 /schedule list)")
     print(f"  \U0001f4c1 ~/.mite/ ({convo_count} saved conversations)")
-    print(f"  Commands: /exit  /reset  /history  /redo  /agent  /save  /load  /list  /config  /help")
+    print(f"  Commands: /exit  /reset  /history  /redo  /agent  /save  /load  /list  /config  /queue  /schedule  /help")
     if initial_task:
         print(f"  Task: {initial_task}\n")
     else:
         print(f"  Type your task or 'help' to start.\n")
+
     while True:
+        due = task_schedule.check_due()
+        if due:
+            for entry in due:
+                print(f"\n  \u23f0 Scheduled task due: \"{entry['task']}\" (every {entry['interval_label']})")
+                print(f"     Run now? [Y/n] ", end="")
+                try:
+                    resp = input().strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    print()
+                    break
+                if resp in ("", "y", "yes"):
+                    task_schedule.mark_run(entry["id"])
+                    print(f"  Running scheduled: {entry['task']}")
+                    should_exit = _process_user_task(
+                        entry["task"], history, model, host,
+                        system_prompt, auto_continue
+                    )
+                    if should_exit:
+                        return
+                    print()
+                else:
+                    task_schedule.mark_run(entry["id"])
+                    print(f"  Skipped. Will run again in {entry['interval_label']}.\n")
+
         if initial_task:
             user_input = initial_task
             initial_task = None
@@ -462,8 +622,10 @@ def run_loop(model: str, host: str, initial_task: str = None, show_sysinfo: bool
             except (EOFError, KeyboardInterrupt):
                 print("\n  Goodbye!")
                 break
+
             if not user_input:
                 continue
+
             if user_input.startswith("/"):
                 cmd = user_input[1:].lower()
                 if cmd in ("exit", "quit", "q"):
@@ -507,7 +669,7 @@ def run_loop(model: str, host: str, initial_task: str = None, show_sysinfo: bool
                 elif cmd == "save" or cmd.startswith("save "):
                     name = cmd[5:].strip() if len(cmd) > 5 else ""
                     if not name:
-                        print("  Usage: /save <name>  — save conversation to ~/.mite/conversations/<name>.json")
+                        print("  Usage: /save <name>  \u2014 save conversation to ~/.mite/conversations/<name>.json")
                         continue
                     msg = _save_conversation(name, history)
                     print(f"  \U0001f4be {msg}")
@@ -515,7 +677,7 @@ def run_loop(model: str, host: str, initial_task: str = None, show_sysinfo: bool
                 elif cmd == "load" or cmd.startswith("load "):
                     name = cmd[5:].strip() if len(cmd) > 5 else ""
                     if not name:
-                        print("  Usage: /load <name>  — load conversation from ~/.mite/conversations/<name>.json")
+                        print("  Usage: /load <name>  \u2014 load conversation from ~/.mite/conversations/<name>.json")
                         continue
                     loaded = _load_conversation(name)
                     if loaded is None:
@@ -543,7 +705,7 @@ def run_loop(model: str, host: str, initial_task: str = None, show_sysinfo: bool
                             for k, v in config.items():
                                 print(f"     {k}: {v}")
                         else:
-                            print("     (defaults — no config saved yet)")
+                            print("     (defaults \u2014 no config saved yet)")
                         print(f"     Use /config <key> <value> to set")
                         print(f"     Current model: {model}")
                         print(f"     Current sysinfo: {show_sysinfo}")
@@ -575,97 +737,168 @@ def run_loop(model: str, host: str, initial_task: str = None, show_sysinfo: bool
                         auto_continue = value.lower() in ("true", "1", "yes")
                         print(f"  auto_continue {'enabled' if auto_continue else 'disabled'}")
                     continue
+
+                # --- Task queue commands ---
+                elif cmd == "queue" or cmd.startswith("queue "):
+                    qargs = cmd[6:].strip() if len(cmd) > 6 else ""
+                    if qargs.startswith("add "):
+                        task_text = qargs[4:].strip()
+                        if task_text:
+                            tid = task_queue.add(task_text)
+                            qcount = task_queue.count_pending()
+                            print(f"  \U0001f4cb Task #{tid} queued ({qcount} pending)")
+                        else:
+                            print("  Usage: /queue add <task description>")
+                    elif qargs == "list":
+                        tasks = task_queue.list()
+                        if tasks:
+                            for t in tasks:
+                                icon = {"pending": "\u23f3", "running": "\U0001f527", "completed": "\u2705", "failed": "\u274c"}.get(t["status"], "?")
+                                print(f"  {icon} #{t['id']:2d} [{t['status']:9s}] {t['task'][:80]}")
+                        else:
+                            print("  Queue is empty.")
+                    elif qargs.startswith("remove "):
+                        try:
+                            rid = int(qargs.split()[1])
+                            if task_queue.remove(rid):
+                                print(f"  Removed task #{rid}")
+                            else:
+                                print(f"  No task #{rid}")
+                        except (ValueError, IndexError):
+                            print("  Usage: /queue remove <task_id>")
+                    elif qargs == "clear":
+                        task_queue.clear()
+                        print("  Queue cleared.")
+                    elif qargs == "start":
+                        pending = task_queue.pending()
+                        if not pending:
+                            print("  Queue is empty. Use /queue add <task> first.")
+                            continue
+                        task_queue.processing = True
+                        print(f"  Processing {len(pending)} queued task{'s' if len(pending) != 1 else ''}...\n")
+                        while task_queue.processing:
+                            task = task_queue.next_pending()
+                            if not task:
+                                print("  \u2705 Queue complete!")
+                                break
+                            print(f"  \U0001f4cb Task #{task['id']}: {task['task']}")
+                            print(f"  {'=' * 60}")
+                            should_exit = _process_user_task(
+                                task["task"], history, model, host,
+                                system_prompt, auto_continue
+                            )
+                            if should_exit:
+                                task_queue.mark_done(task["id"])
+                                task_queue.processing = False
+                                return
+                            task_queue.mark_done(task["id"])
+                            print(f"  \u2705 Task #{task['id']} completed\n")
+                            remaining = task_queue.count_pending()
+                            if remaining:
+                                print(f"  \U0001f4cb {remaining} task{'s' if remaining != 1 else ''} remaining in queue.\n")
+                            else:
+                                print("  \u2705 All tasks completed!")
+                        task_queue.processing = False
+                    elif qargs == "stop":
+                        if task_queue.processing:
+                            task_queue.processing = False
+                            print("  Queue processing stopped.")
+                        else:
+                            print("  Queue is not currently processing.")
+                    else:
+                        print("  Subcommands: add, list, remove <id>, clear, start, stop")
+                    continue
+
+                # --- Schedule commands ---
+                elif cmd == "schedule" or cmd.startswith("schedule "):
+                    sargs = cmd[9:].strip() if len(cmd) > 9 else ""
+                    if sargs.startswith("add "):
+                        rest = sargs[4:].strip()
+                        if not rest:
+                            print("  Usage: /schedule add <interval> <task>")
+                            print("  Intervals: 30m, 1h, 2h30m, 3600, 'every 30 minutes'")
+                            continue
+                        sep_idx = -1
+                        for i, ch in enumerate(rest):
+                            if ch == ' ' and i > 0:
+                                left = rest[:i]
+                                parsed = parse_interval(left)
+                                if parsed is not None:
+                                    sep_idx = i
+                                    break
+                        if sep_idx == -1:
+                            for i, ch in enumerate(rest):
+                                if i > 0 and ch.isalpha() and rest[i-1].isdigit():
+                                    if i+1 < len(rest) and rest[i+1] in (' ', '\t'):
+                                        left = rest[:i+1]
+                                        parsed = parse_interval(left)
+                                        if parsed is not None:
+                                            sep_idx = i+2
+                                            break
+                        if sep_idx == -1:
+                            print(f"  Could not parse interval from '{rest}'.")
+                            print("  Examples: /schedule add 30m check disk space")
+                            print("            /schedule add 1h backup database")
+                            continue
+                        interval_str = rest[:sep_idx]
+                        task_str = rest[sep_idx:].strip()
+                        interval_sec = parse_interval(interval_str)
+                        if interval_sec is None:
+                            print(f"  Could not parse interval '{interval_str}'.")
+                            continue
+                        if not task_str:
+                            print("  No task specified.")
+                            continue
+                        sid = task_schedule.add(interval_sec, task_str)
+                        print(f"  \U0001f4c5 Scheduled #{sid}: \"{task_str}\" every {format_interval(interval_sec)}")
+                        print(f"     (will prompt on next interaction)")
+                    elif sargs == "list":
+                        entries = task_schedule.list()
+                        if entries:
+                            for e in entries:
+                                icon = "\u2705" if e.get("enabled", True) else "\u23f8"
+                                print(f"  {icon} #{e['id']:2d} [{e['interval_label']:>6s}] {e['task'][:70]}{' [paused]' if not e.get('enabled', True) else ''}")
+                        else:
+                            print("  No scheduled tasks.")
+                    elif sargs.startswith("remove "):
+                        try:
+                            rid = int(sargs.split()[1])
+                            if task_schedule.remove(rid):
+                                print(f"  Removed schedule #{rid}")
+                            else:
+                                print(f"  No schedule #{rid}")
+                        except (ValueError, IndexError):
+                            print("  Usage: /schedule remove <id>")
+                    elif sargs == "clear":
+                        task_schedule.clear()
+                        print("  All scheduled tasks cleared.")
+                    elif sargs.startswith("pause "):
+                        try:
+                            pid = int(sargs.split()[1])
+                            task_schedule.disable(pid)
+                            print(f"  Schedule #{pid} paused.")
+                        except (ValueError, IndexError):
+                            print("  Usage: /schedule pause <id>")
+                    elif sargs.startswith("resume "):
+                        try:
+                            pid = int(sargs.split()[1])
+                            task_schedule.enable(pid)
+                            print(f"  Schedule #{pid} resumed (next run: now).")
+                        except (ValueError, IndexError):
+                            print("  Usage: /schedule resume <id>")
+                    else:
+                        print("  Subcommands: add <interval> <task>, list, remove <id>, clear, pause <id>, resume <id>")
+                    continue
+
                 else:
                     print(f"  Unknown: {user_input}")
                     continue
+
         last_prompt = user_input
-        agent_content = _load_agent_md()
-        if agent_content:
-            user_input = f"[AGENT.md instructions]\n{agent_content}\n\n[Task]\n{user_input}"
-        history.append({"role": "user", "content": user_input})
-        max_auto_steps = 20 if auto_continue else 5
-        auto_steps_remaining = max_auto_steps
-        while True:
-            messages = prompts.build_prompt(history, system_prompt=system_prompt)
-            print(f"  \u23f3", end="", flush=True)
-            start_time = time.time()
-            response = _call_ollama(messages, model, host)
-            if response is None:
-                print("")
-                history.pop()
-                break
-            elapsed = time.time() - start_time
-            print(f" ({elapsed:.1f}s)")
-            tool_call = _parse_tool_call(response)
-            if tool_call:
-                tool_name = tool_call["tool"]
-                tool_args = tool_call["args"]
-                thought = tool_call.get("thought", "")
-                if thought:
-                    print(f"  \U0001f4ad {thought[:200]}")
-                if tool_name == "finish":
-                    msg = tool_args.get("message", "")
-                    print(f"\n  \u2705 {msg}" if msg else "\n  \u2705 Done!")
-                    history.append({"role": "assistant", "content": response.strip()})
-                    step += 1
-                    return
-                print(f"  \U0001f527 {tool_name}({_args_str(tool_args)})")
-                result = tools.execute_tool(tool_name, tool_args)
-                print(f"\n{result[:1200]}")
-                history.append({"role": "assistant", "content": response.strip()})
-                truncated = result[:800]
-                if len(result) > 800:
-                    truncated += "\n... (truncated)"
-                history.append({"role": "system", "content": f"Result:\n{truncated}"})
-                _trim_history(history)
-                step += 1
-                auto_steps_remaining -= 1
-                if auto_steps_remaining <= 0:
-                    if auto_continue:
-                        print(f"  \u26a0 Auto-continue limit ({max_auto_steps} steps) reached. Type more to continue.")
-                    break
-                continue
-            else:
-                print(f"\n{response.strip()[:800]}")
-                history.append({"role": "assistant", "content": response.strip()})
-                _trim_history(history)
-                step += 1
-                if auto_continue:
-                    signal = _detect_finish_or_question(response)
-                    if signal == "finish":
-                        print("  (auto-continue: model signaled completion)")
-                        break
-                    elif signal == "question":
-                        print("  (auto-continue: waiting for your response)")
-                        break
-                    else:
-                        auto_steps_remaining -= 1
-                        if auto_steps_remaining <= 0:
-                            print(f"  \u26a0 Auto-continue limit ({max_auto_steps} steps) reached. Type more to continue.")
-                            break
-                        recent_nl = 0
-                        for m in reversed(history):
-                            if m["role"] == "assistant":
-                                if not _parse_tool_call(m["content"]):
-                                    recent_nl += 1
-                                else:
-                                    break
-                                if recent_nl >= 3:
-                                    break
-                        if recent_nl >= 3:
-                            print("  \u26a0 Agent seems stuck (3+ responses without action). Type to guide it.")
-                            break
-                        print("  \u23e9 (auto-continue)")
-                        continue_prompt = (
-                            "continue. "
-                            "Use TOOL read_file, write_file, patch, shell, or search to make progress. "
-                            "When the task is complete, use TOOL finish."
-                        )
-                        history.append({"role": "user", "content": continue_prompt})
-                        _trim_history(history)
-                        continue
-                else:
-                    break
+        should_exit = _process_user_task(user_input, history, model, host, system_prompt, auto_continue)
+        if should_exit:
+            return
+
         if step > 50:
             print("\n  \u26a0 Many steps. Use /reset for a new task.")
 
@@ -705,6 +938,18 @@ def _show_help():
     /list             - List saved conversations
     /config           - Show current config (~/.mite/config.json)
     /config <k> <v>   - Set a config value (model, show_sysinfo, auto_continue)
+    /queue add <t>    - Add a task to the sequential queue
+    /queue list       - List queued tasks
+    /queue start      - Start processing the queue (runs tasks one at a time)
+    /queue stop       - Stop queue processing
+    /queue clear      - Clear all queued tasks
+    /queue remove <n> - Remove a specific task from the queue
+    /schedule add <interval> <task> - Schedule a recurring task
+    /schedule list    - List scheduled tasks
+    /schedule remove  - Remove a scheduled task
+    /schedule pause   - Pause a scheduled task
+    /schedule resume  - Resume a paused scheduled task
+    /schedule clear   - Clear all scheduled tasks
     /help             - This help
 
   Auto-Continue:
@@ -725,6 +970,11 @@ def _show_help():
     and disk at startup. This info is also injected into every prompt
     so the AI can use it. Disable with: mite --no-sysinfo
     Or: /config show_sysinfo false
+
+  Task Manager:
+    Queue tasks sequentially with /queue, schedule recurring tasks
+    with /schedule. Tasks persist in ~/.mite/queue.json and
+    ~/.mite/schedule.json. See /queue help and /schedule help.
 
   Conversations:
     Your conversations, AGENT.md, and preferences live under ~/.mite/.
