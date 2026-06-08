@@ -156,18 +156,21 @@ def _parse_tool_call_singleline(text: str) -> dict | None:
     if len(tokens) < 2:
         return None
     tool_name = tokens[1].lower().strip()
+
     TOOL_NAME_ALIASES = {
         "write": "write_file", "read": "read_file", "edit": "patch",
         "replace": "patch", "run": "shell", "exec": "shell",
         "find": "search", "grep": "search",
     }
     tool_name = TOOL_NAME_ALIASES.get(tool_name, tool_name)
+
     valid_tools = set(tools.TOOLS.keys())
     if tool_name not in valid_tools:
         if tool_name.endswith(":") or tool_name.endswith("."):
             tool_name = tool_name[:-1].strip()
         if tool_name not in valid_tools:
             return None
+
     args = {}
     ARG_ALIASES = {
         "old": "old_string", "new": "new_string", "cmd": "command",
@@ -382,6 +385,13 @@ def _get_sysinfo() -> str:
 
 
 def _load_agent_md() -> str:
+    """Load AGENT.md, checking project-level then user-level paths.
+
+    Priority:
+    1. ./AGENT.md (project root \u2014 highest priority)
+    2. ./.mite/AGENT.md (project scoped)
+    3. ~/.mite/AGENT.md (user level)
+    """
     paths = [
         os.path.join(os.getcwd(), "AGENT.md"),
         os.path.join(os.getcwd(), ".mite", "AGENT.md"),
@@ -429,18 +439,25 @@ def _detect_finish_or_question(text: str) -> str:
     return "continue"
 
 
+# --- Task processing via model loop ---
+
 def _process_user_task(user_input: str, history: list, model: str, host: str,
                        system_prompt: str, auto_continue: bool) -> bool:
-    agent_content = _load_agent_md()
-    if agent_content:
-        augmented = f"[AGENT.md instructions]\n{agent_content}\n\n[Task]\n{user_input}"
-    else:
-        augmented = user_input
-    history.append({"role": "user", "content": augmented})
+    """Run a single task through the model loop.
+
+    Appends user_input to history, runs the model loop with auto-follow-up
+    and auto-continue, and returns True if TOOL finish was called
+    (caller should exit), False otherwise.
+    """
+    history.append({"role": "user", "content": user_input})
+
     max_auto_steps = 20 if auto_continue else 5
     auto_steps_remaining = max_auto_steps
+
     while True:
+        # Build prompt with system prompt (includes sysinfo + AGENT.md at session start)
         messages = prompts.build_prompt(history, system_prompt=system_prompt)
+
         print(f"  \u23f3", end="", flush=True)
         start_time = time.time()
         response = _call_ollama(messages, model, host)
@@ -448,39 +465,49 @@ def _process_user_task(user_input: str, history: list, model: str, host: str,
             print("")
             history.pop()
             return False
+
         elapsed = time.time() - start_time
         print(f" ({elapsed:.1f}s)")
+
         tool_call = _parse_tool_call(response)
+
         if tool_call:
             tool_name = tool_call["tool"]
             tool_args = tool_call["args"]
             thought = tool_call.get("thought", "")
+
             if thought:
                 print(f"  \U0001f4ad {thought[:200]}")
+
             if tool_name == "finish":
                 msg = tool_args.get("message", "")
                 print(f"\n  \u2705 {msg}" if msg else "\n  \u2705 Done!")
                 history.append({"role": "assistant", "content": response.strip()})
                 return True
+
             print(f"  \U0001f527 {tool_name}({_args_str(tool_args)})")
             result = tools.execute_tool(tool_name, tool_args)
             print(f"\n{result[:1200]}")
+
             history.append({"role": "assistant", "content": response.strip()})
             truncated = result[:800]
             if len(result) > 800:
                 truncated += "\n... (truncated)"
             history.append({"role": "system", "content": f"Result:\n{truncated}"})
             _trim_history(history)
+
             auto_steps_remaining -= 1
             if auto_steps_remaining <= 0:
                 if auto_continue:
                     print(f"  \u26a0 Auto-continue limit ({max_auto_steps} steps) reached.")
                 break
             continue
+
         else:
             print(f"\n{response.strip()[:800]}")
             history.append({"role": "assistant", "content": response.strip()})
             _trim_history(history)
+
             if auto_continue:
                 signal = _detect_finish_or_question(response)
                 if signal == "finish":
@@ -494,6 +521,8 @@ def _process_user_task(user_input: str, history: list, model: str, host: str,
                     if auto_steps_remaining <= 0:
                         print(f"  \u26a0 Auto-continue limit ({max_auto_steps} steps) reached.")
                         break
+
+                    # Stuck detection: 3+ consecutive NL responses = stuck
                     recent_nl = 0
                     for m in reversed(history):
                         if m["role"] == "assistant":
@@ -506,18 +535,21 @@ def _process_user_task(user_input: str, history: list, model: str, host: str,
                     if recent_nl >= 3:
                         print("  \u26a0 Agent seems stuck (3+ responses without action).")
                         break
+
                     print("  \u23e9 (auto-continue)")
                     history.append({"role": "user", "content": prompts.CONTINUE_PROMPT})
                     _trim_history(history)
                     continue
             else:
                 break
+
     return False
 
 
 def run_loop(model: str, host: str, initial_task: str = None, show_sysinfo: bool = True, auto_continue: bool = True):
     _setup_readline()
     _ensure_userdata_dir()
+
     config = _load_config()
     if config.get("model"):
         model = config["model"]
@@ -528,6 +560,7 @@ def run_loop(model: str, host: str, initial_task: str = None, show_sysinfo: bool
         raw = config["auto_continue"]
         auto_continue = raw if isinstance(raw, bool) else str(raw).lower() in ("true", "1", "yes")
 
+    # Initialize task queue and schedule
     task_queue = TaskQueue()
     task_schedule = TaskSchedule()
     pending_count = task_queue.count_pending()
@@ -537,14 +570,24 @@ def run_loop(model: str, host: str, initial_task: str = None, show_sysinfo: bool
     last_prompt = ""
     step = 0
     agent_md_active = bool(_load_agent_md())
+
+    # Gather system info
     sysinfo = _get_sysinfo() if show_sysinfo else ""
-    _sysinfo_str = f"\n[System information]\n{sysinfo}\n" if sysinfo else ""
-    system_prompt = prompts.SYSTEM_PROMPT + _sysinfo_str
+    _sysinfo_str = f"\n[System info]\n{sysinfo}\n" if sysinfo else ""
+
+    # Load AGENT.md once at session start (not per-prompt)
+    agent_content = _load_agent_md()
+    _agent_md_str = f"\n[Project context]\n{agent_content}\n" if agent_content else ""
+
+    # Build augmented system prompt with sysinfo and AGENT.md
+    system_prompt = prompts.SYSTEM_PROMPT + _sysinfo_str + _agent_md_str
+
+    # Count saved conversations
     convo_count = len(_list_conversations())
 
     print(f"\n  \U0001f916 Mite active | model: {model}")
     if agent_md_active:
-        print(f"  \U0001f4cb AGENT.md loaded (re-reads on every prompt)")
+        print(f"  \U0001f4cb AGENT.md loaded at startup (re-reads on /reset)")
     if sysinfo:
         print(f"  \U0001f5a5  System info:")
         for line in sysinfo.splitlines():
@@ -563,6 +606,7 @@ def run_loop(model: str, host: str, initial_task: str = None, show_sysinfo: bool
         print(f"  Type your task or 'help' to start.\n")
 
     while True:
+        # --- Check for due scheduled tasks ---
         due = task_schedule.check_due()
         if due:
             for entry in due:
@@ -587,6 +631,7 @@ def run_loop(model: str, host: str, initial_task: str = None, show_sysinfo: bool
                     task_schedule.mark_run(entry["id"])
                     print(f"  Skipped. Will run again in {entry['interval_label']}.\n")
 
+        # --- Get user input ---
         if initial_task:
             user_input = initial_task
             initial_task = None
@@ -600,6 +645,7 @@ def run_loop(model: str, host: str, initial_task: str = None, show_sysinfo: bool
             if not user_input:
                 continue
 
+            # --- Command handling ---
             if user_input.startswith("/"):
                 cmd = user_input[1:].lower()
                 if cmd in ("exit", "quit", "q"):
@@ -607,7 +653,12 @@ def run_loop(model: str, host: str, initial_task: str = None, show_sysinfo: bool
                     break
                 elif cmd == "reset":
                     history = []
-                    print("  Conversation reset.")
+                    # Re-read AGENT.md and rebuild system prompt
+                    agent_content = _load_agent_md()
+                    _agent_md_str = f"\n[Project context]\n{agent_content}\n" if agent_content else ""
+                    system_prompt = prompts.SYSTEM_PROMPT + _sysinfo_str + _agent_md_str
+                    agent_md_active = bool(agent_content)
+                    print(f"  Conversation reset. AGENT.md {'loaded' if agent_md_active else 'not found'}.")
                     continue
                 elif cmd == "history":
                     for h in history[-6:]:
@@ -626,12 +677,13 @@ def run_loop(model: str, host: str, initial_task: str = None, show_sysinfo: bool
                 elif cmd == "agent":
                     content = _load_agent_md()
                     if content:
-                        print(f"  \U0001f4cb AGENT.md loaded ({len(content)} chars):")
+                        print(f"  \U0001f4cb AGENT.md loaded ({len(content)} chars, injected into system prompt):")
+                        print(f"     (re-reads on /reset)")
                         for line in content.splitlines():
                             print(f"    {line}")
                     else:
                         print("  No AGENT.md found.")
-                        print("  Create AGENT.md in the current directory to persist instructions.")
+                        print("  Create AGENT.md in the current directory, then run /reset.")
                     continue
                 elif cmd in ("redo", "r"):
                     if last_prompt:
@@ -866,7 +918,10 @@ def run_loop(model: str, host: str, initial_task: str = None, show_sysinfo: bool
                     print(f"  Unknown: {user_input}")
                     continue
 
+        # --- Track last prompt for /redo ---
         last_prompt = user_input
+
+        # Process through the model loop (system prompt already includes AGENT.md + sysinfo)
         should_exit = _process_user_task(user_input, history, model, host, system_prompt, auto_continue)
         if should_exit:
             return
@@ -900,11 +955,11 @@ def _show_help():
     print("""
   Mite Commands:
     /exit             - Exit
-    /reset            - Reset conversation
+    /reset            - Reset conversation (re-reads AGENT.md)
     /redo (/r)        - Re-run the last prompt
     /history          - Show recent context
     /model <n>        - Switch model (for current session)
-    /agent            - Show AGENT.md instructions (re-reads on every prompt)
+    /agent            - Show AGENT.md instructions (injected into system prompt)
     /save <name>      - Save conversation to ~/.mite/conversations/<name>.json
     /load <name>      - Load a saved conversation
     /list             - List saved conversations
@@ -933,8 +988,9 @@ def _show_help():
 
   AGENT.md:
     Create AGENT.md in the current directory (project-level) or in
-    ~/.mite/AGENT.md (user-level, persistent) to persist instructions
-    the AI receives before every prompt.
+    ~/.mite/AGENT.md (user-level) to inject persistent instructions
+    into the system prompt at session start.
+    Inject once at startup, re-read on /reset.
     Priority: ./AGENT.md > ./.mite/AGENT.md > ~/.mite/AGENT.md
 
   System Info:
