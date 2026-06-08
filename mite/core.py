@@ -1,7 +1,3 @@
-"""
-Core interaction loop for Mite.
-Handles the model chat loop with robust parsing for small models.
-"""
 import re
 import json
 import sys
@@ -18,84 +14,112 @@ from . import prompts
 from . import tools
 
 
-# --- Readline history (up/down arrow key support) ---
 _HISTFILE = os.path.expanduser("~/.mite_history")
 _HISTSIZE = 100
 
 
 def _setup_readline():
-    """Enable readline for arrow-key history prefilling on input()."""
     try:
         readline.set_history_length(_HISTSIZE)
         if os.path.exists(_HISTFILE):
             readline.read_history_file(_HISTFILE)
         atexit.register(readline.write_history_file, _HISTFILE)
-
-        # Bind up arrow to previous-history (default) \u2014 no extra config needed
-        # readline.enable_auto_history is on by default in CPython
     except Exception:
-        pass  # Non-fatal; readline is optional
+        pass
+
+
+_USERDATA_DIR = os.path.expanduser("~/.mite")
+_CONVERSATIONS_DIR = os.path.join(_USERDATA_DIR, "conversations")
+_CONFIG_FILE = os.path.join(_USERDATA_DIR, "config.json")
+
+
+def _ensure_userdata_dir():
+    os.makedirs(_CONVERSATIONS_DIR, exist_ok=True)
+
+
+def _load_config() -> dict:
+    try:
+        if os.path.isfile(_CONFIG_FILE):
+            with open(_CONFIG_FILE) as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def _save_config(config: dict):
+    try:
+        _ensure_userdata_dir()
+        with open(_CONFIG_FILE, "w") as f:
+            json.dump(config, f, indent=2)
+    except Exception as e:
+        print(f"  \u26a0 Failed to save config: {e}")
+
+
+def _save_conversation(name: str, history: list) -> str:
+    clean = [m for m in history if m["role"] != "system"]
+    path = os.path.join(_CONVERSATIONS_DIR, f"{name}.json")
+    try:
+        _ensure_userdata_dir()
+        with open(path, "w") as f:
+            json.dump(clean, f, indent=2)
+        return f"Saved {len(clean)} messages to '{name}'"
+    except Exception as e:
+        return f"Failed to save: {e}"
+
+
+def _load_conversation(name: str) -> list | None:
+    path = os.path.join(_CONVERSATIONS_DIR, f"{name}.json")
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return None
+    except Exception as e:
+        print(f"  \u26a0 Failed to load '{name}': {e}")
+        return None
+
+
+def _list_conversations() -> list[str]:
+    try:
+        files = sorted(os.listdir(_CONVERSATIONS_DIR))
+        return sorted(set(f.replace(".json", "") for f in files if f.endswith(".json")))
+    except FileNotFoundError:
+        return []
 
 
 def _strip_chat_noise(text: str) -> str:
-    """Strip conversation contamination from model output.
-
-    Tiny models sometimes echo back user messages or their own previous
-    responses. Strip anything that looks like chat before parsing tools.
-    """
     text = str(text)
-
-    # Strip lines that start with "USER:" or "user:" or "User:" (common contamination)
     lines = text.split("\n")
     clean = []
     for line in lines:
         stripped = line.strip()
-        # Skip lines that look like chat contamination
-        if re.match(r'^(USER|user|User|Assistant|assistant|AI|ai|System|system)\s*:', stripped):
+        if re.match(r'^(USER|user|User|Assistant|assistant|AI|ai|System|system)\\s*:', stripped):
             continue
-        # Skip lines that are full user-like questions
         if stripped.startswith("What's") or stripped.startswith("How do I") or stripped.startswith("Can you"):
-            # Only skip if this looks like it's IN the middle of a tool section
             continue
         clean.append(line)
-
     return "\n".join(clean)
 
 
 def _parse_tool_call_singleline(text: str) -> dict | None:
-    """Parse a tool call from model output.
-
-    Format: TOOL toolname arg1=value arg2="value with spaces"
-
-    For tiny models, this format is much easier to produce reliably
-    than multi-line key:value pairs.
-    """
     if not text or not isinstance(text, str):
         return None
-
     text = text.strip()
     if not text.startswith("TOOL"):
         return None
-
-    # Strip to only the TOOL line (ignore anything after)
     tool_line = ""
     for line in text.split("\n"):
         stripped = line.strip()
         if stripped.startswith("TOOL"):
             tool_line = stripped
             break
-
     if not tool_line:
         return None
-
-    # Parse: TOOL toolname arg1=value1 arg2=value2
-    # Handle both quoted values arg="value with spaces" and unquoted arg=value
-    # Regex: match tokens that are either quoted strings or non-space sequences
     tokens = []
     i = 0
     while i < len(tool_line):
         if tool_line[i] in ('"', "'"):
-            # Quoted string
             quote = tool_line[i]
             j = i + 1
             while j < len(tool_line) and tool_line[j] != quote:
@@ -103,19 +127,14 @@ def _parse_tool_call_singleline(text: str) -> dict | None:
             tokens.append(tool_line[i+1:j])
             i = j + 1 if j < len(tool_line) else j
         elif tool_line[i] == '=' and tokens and (len(tokens[-1]) > 0 or not tokens[-1].startswith('--')):
-            # Value might contain spaces (for command args like "ls -la")
-            # Collect everything after = until next known arg or end
             val_start = i + 1
-            # Look ahead for the next key= pattern that's a known arg name
             rest = tool_line[val_start:]
-            # Find the next " key=" pattern
             next_key_match = re.search(r'\s+(\w[\w_]*)=', rest)
             if next_key_match:
                 value = rest[:next_key_match.start()].strip()
                 if value:
                     tokens[-1] += '='
                     tokens.append(value)
-                # Push back the key
                 i = val_start + next_key_match.start() + 1
                 continue
             else:
@@ -129,27 +148,16 @@ def _parse_tool_call_singleline(text: str) -> dict | None:
             i = j
         else:
             i += 1
-
     if len(tokens) < 2:
-        # "TOOL" with no tool name or just bare text
-        # Also handle case where TOOL is followed by toolname on same vs next line
         return None
-
     tool_name = tokens[1].lower().strip()
-
-    # Validate tool name
     valid_tools = set(tools.TOOLS.keys())
     if tool_name not in valid_tools:
-        # Could be contamination \u2014 "TOOL read_file" but extra text makes it "TOOL read_file:"
-        # Try stripping trailing colon
         if tool_name.endswith(":") or tool_name.endswith("."):
             tool_name = tool_name[:-1].strip()
         if tool_name not in valid_tools:
             return None
-
-    # Parse arguments: k=v pairs
     args = {}
-    # Arg name aliases: some models use shorter names
     ARG_ALIASES = {
         "old": "old_string",
         "new": "new_string",
@@ -162,34 +170,26 @@ def _parse_tool_call_singleline(text: str) -> dict | None:
         "folder": "path",
         "directory": "path",
     }
-    i = 2  # Skip "TOOL" and tool_name
+    i = 2
     while i < len(tokens):
         part = tokens[i]
         if "=" in part:
             eq_idx = part.index("=")
             key = part[:eq_idx].strip().lower()
             value = part[eq_idx + 1:].strip().strip('"\'')
-
-            # Apply arg name aliases
             if key in ARG_ALIASES:
                 key = ARG_ALIASES[key]
-
-            # If value is empty, the next token might be the value
             if not value and i + 1 < len(tokens):
                 next_val = tokens[i + 1].strip().strip('"\'')
-                if "=" not in next_val:  # Next token isn't another key=val
+                if "=" not in next_val:
                     value = next_val
-                    i += 1  # Skip next token
-
-            # If value starts with -, next token might continue it (command=ls -la)
+                    i += 1
             if value and value.startswith("-") and i + 1 < len(tokens):
                 next_val = tokens[i + 1].strip().strip('"\'')
                 if "=" not in next_val:
                     value += " " + next_val
                     i += 1
-
             if key:
-                # Type conversions
                 if isinstance(value, str):
                     if value.lower() == "true":
                         value = True
@@ -202,39 +202,25 @@ def _parse_tool_call_singleline(text: str) -> dict | None:
                             pass
                 args[key] = value
         i += 1
-
     return {"tool": tool_name, "args": args, "thought": ""}
 
 
 def _parse_tool_call_multiline(text: str) -> dict | None:
-    """Parse multi-line format as backup.
-
-    Format:
-    THOUGHT: reasoning
-    TOOL: tool_name
-    key: value
-    key2: value2
-    """
     if not text or not isinstance(text, str):
         return None
-
     lines = text.strip().split("\n")
     tool_name = None
     args = {}
     in_args = False
     thought = ""
-
     for line in lines:
         stripped = line.strip()
         if not stripped:
             continue
-
-        # Handle both "TOOL:" and "TOOL toolname"
         if stripped.upper().startswith("THOUGHT:"):
             thought = stripped[8:].strip()
             in_args = False
         elif stripped.upper().startswith("TOOL") or stripped.upper().startswith("TOOL:"):
-            # Handle "TOOL: read_file" or "TOOL read_file" or "TOOL:read_file"
             tool_part = stripped[4:].strip().lstrip(":")
             tool_name = tool_part.strip().lower().split()[0] if tool_part else None
             in_args = True
@@ -243,7 +229,6 @@ def _parse_tool_call_multiline(text: str) -> dict | None:
             key = stripped[:colon_idx].strip().lower()
             value = stripped[colon_idx + 1:].strip()
             if key and value:
-                # Don't accept random keys that look like sentences
                 if " " not in key and not key.startswith("the") and not key.startswith("to"):
                     if value.lower() == "true":
                         value = True
@@ -255,28 +240,20 @@ def _parse_tool_call_multiline(text: str) -> dict | None:
                         except (ValueError, AttributeError):
                             pass
                     args[key] = value
-
     if tool_name:
         return {"tool": tool_name, "args": args, "thought": thought}
     return None
 
 
 def _parse_tool_call(text: str) -> dict | None:
-    """Parse a tool call from model output using multiple strategies."""
     if not text or not isinstance(text, str):
         return None
-
-    # Strategy 1: Single-line TOOL format
     result = _parse_tool_call_singleline(text)
     if result:
         return result
-
-    # Strategy 2: Multi-line key:value format (backup)
     result = _parse_tool_call_multiline(text)
     if result:
         return result
-
-    # Strategy 3: Try stripping chat noise, then re-parse
     cleaned = _strip_chat_noise(text)
     if cleaned != text:
         result = _parse_tool_call_singleline(cleaned)
@@ -285,23 +262,27 @@ def _parse_tool_call(text: str) -> dict | None:
         result = _parse_tool_call_multiline(cleaned)
         if result:
             return result
-
+    text_stripped = text.strip()
+    if text_stripped and "=" in text_stripped:
+        first_word = text_stripped.split()[0].lower().rstrip(":")
+        if first_word in tools.TOOLS:
+            result = _parse_tool_call_singleline("TOOL " + text_stripped)
+            if result:
+                return result
     return None
 
 
 def _call_ollama(messages: list[dict], model: str, host: str = "http://localhost:11434") -> str | None:
-    """Call the Ollama API and return the response text."""
     payload = json.dumps({
         "model": model,
         "messages": messages,
         "stream": False,
         "options": {
-            "temperature": 0.1,  # Very low temp for reliable structured output
-            "num_predict": 512,   # Keep responses short
-            "stop": ["\n\n\n"],   # Stop on double newlines
+            "temperature": 0.1,
+            "num_predict": 512,
+            "stop": ["\n\n\n"],
         }
     }).encode()
-
     req = urllib.request.Request(
         f"{host}/api/chat",
         data=payload,
@@ -323,16 +304,8 @@ def _call_ollama(messages: list[dict], model: str, host: str = "http://localhost
 
 
 def _get_sysinfo() -> str:
-    """Gather system information string for the agent context.
-
-    Returns a multi-line string with platform, user, hostname,
-    available memory, and available disk space.
-    """
     lines = []
-
-    # Platform
     try:
-        # Try os-release PRETTY_NAME first (e.g., "Debian GNU/Linux 12")
         _found = False
         if os.path.exists("/etc/os-release"):
             with open("/etc/os-release") as f:
@@ -353,29 +326,23 @@ def _get_sysinfo() -> str:
             lines.append(platform.platform(terse=True))
         except Exception:
             lines.append("Unknown platform")
-
-    # User
     try:
         user = getpass.getuser()
         lines.append(f"User: {user}")
     except Exception:
         pass
-
-    # Hostname
     try:
         hostname = platform.node()
         if hostname:
             lines.append(f"Hostname: {hostname}")
     except Exception:
         pass
-
-    # Memory
     try:
         if os.path.exists("/proc/meminfo"):
             with open("/proc/meminfo") as f:
                 for line in f:
                     if line.startswith("MemAvailable:"):
-                        kb = int(line.split()[1]) * 1024  # kB → bytes
+                        kb = int(line.split()[1]) * 1024
                         if kb >= 1024 ** 3:
                             mem = f"{kb / 1024 ** 3:.1f} GB"
                         elif kb >= 1024 ** 2:
@@ -386,8 +353,6 @@ def _get_sysinfo() -> str:
                         break
     except Exception:
         pass
-
-    # Disk (current directory)
     try:
         st = shutil.disk_usage(os.getcwd())
         free = st.free
@@ -401,18 +366,16 @@ def _get_sysinfo() -> str:
         lines.append(f"Available storage: {disk} (of {total_disk})")
     except Exception:
         pass
-
     return "\n".join(lines)
 
 
 def _load_agent_md() -> str:
-    """Load AGENT.md from the current working directory.
-
-    Checks for AGENT.md (project root) or .mite/AGENT.md (scoped).
-    Content is prepended to every user prompt as persistent instructions.
-    """
-    for rel_path in ["AGENT.md", ".mite/AGENT.md"]:
-        full_path = os.path.join(os.getcwd(), rel_path)
+    paths = [
+        os.path.join(os.getcwd(), "AGENT.md"),
+        os.path.join(os.getcwd(), ".mite", "AGENT.md"),
+        os.path.join(_USERDATA_DIR, "AGENT.md"),
+    ]
+    for full_path in paths:
         if os.path.isfile(full_path):
             try:
                 with open(full_path) as f:
@@ -424,23 +387,56 @@ def _load_agent_md() -> str:
     return ""
 
 
-def run_loop(model: str, host: str, initial_task: str = None, show_sysinfo: bool = True):
-    """Run the interactive Mite loop with auto-follow-up after tool calls."""
-    # Enable up/down arrow key history for input()
-    _setup_readline()
+def _detect_finish_or_question(text: str) -> str:
+    if not text:
+        return "continue"
+    text_lower = text.strip().lower()
+    finish_patterns = [
+        r'\b(the task|the work|everything|this)\s+(is|has been)\s+(complete|completed|done|finished)',
+        r'\bi(\'ve| have)\s+(finished|completed|done|accomplished)',
+        r'\b(task|work).*complete',
+        r'\ball\s+(done|set|finished|complete)',
+        r'\bdone\s*[\.!]*\s*$',
+        r'\bfinished\s*[\.!]*\s*$',
+        r'\bcomplete[d]?\s*[\.!]*\s*$',
+    ]
+    for pat in finish_patterns:
+        if re.search(pat, text_lower):
+            return "finish"
+    if "?" in text:
+        return "question"
+    question_phrases = [
+        "would you like", "shall i", "should i", "do you want",
+        "anything else", "what next", "next step", "proceed",
+        "is there anything", "let me know if", "tell me if",
+        "can i help", "how can i", "what would you",
+    ]
+    for phrase in question_phrases:
+        if phrase in text_lower:
+            return "question"
+    return "continue"
 
+
+def run_loop(model: str, host: str, initial_task: str = None, show_sysinfo: bool = True, auto_continue: bool = True):
+    _setup_readline()
+    _ensure_userdata_dir()
+    config = _load_config()
+    if config.get("model"):
+        model = config["model"]
+    if "show_sysinfo" in config:
+        raw = config["show_sysinfo"]
+        show_sysinfo = raw if isinstance(raw, bool) else str(raw).lower() in ("true", "1", "yes")
+    if "auto_continue" in config:
+        raw = config["auto_continue"]
+        auto_continue = raw if isinstance(raw, bool) else str(raw).lower() in ("true", "1", "yes")
     history = []
     last_prompt = ""
     step = 0
     agent_md_active = bool(_load_agent_md())
-
-    # Gather system info
     sysinfo = _get_sysinfo() if show_sysinfo else ""
     _sysinfo_str = f"\n[System information]\n{sysinfo}\n" if sysinfo else ""
-
-    # Build augmented system prompt with sysinfo context for the model
     system_prompt = prompts.SYSTEM_PROMPT + _sysinfo_str
-
+    convo_count = len(_list_conversations())
     print(f"\n  \U0001f916 Mite active | model: {model}")
     if agent_md_active:
         print(f"  \U0001f4cb AGENT.md loaded (re-reads on every prompt)")
@@ -448,27 +444,26 @@ def run_loop(model: str, host: str, initial_task: str = None, show_sysinfo: bool
         print(f"  \U0001f5a5  System info:")
         for line in sysinfo.splitlines():
             print(f"     {line}")
-    print(f"  Commands: /exit  /reset  /history  /redo  /agent  /help")
+    if auto_continue:
+        print(f"  \u23e9 Auto-continue ON  — agent keeps working until done or stuck")
+    print(f"  \U0001f4c1 ~/.mite/ ({convo_count} saved conversations)")
+    print(f"  Commands: /exit  /reset  /history  /redo  /agent  /save  /load  /list  /config  /help")
     if initial_task:
         print(f"  Task: {initial_task}\n")
     else:
         print(f"  Type your task or 'help' to start.\n")
-
     while True:
-        # --- Get user input ---
         if initial_task:
             user_input = initial_task
             initial_task = None
         else:
             try:
-                user_input = input("\u2503 ").strip()
+                user_input = input("\U00010203 ").strip()
             except (EOFError, KeyboardInterrupt):
                 print("\n  Goodbye!")
                 break
-
             if not user_input:
                 continue
-
             if user_input.startswith("/"):
                 cmd = user_input[1:].lower()
                 if cmd in ("exit", "quit", "q"):
@@ -509,63 +504,114 @@ def run_loop(model: str, host: str, initial_task: str = None, show_sysinfo: bool
                     else:
                         print("  No previous prompt to redo.")
                         continue
+                elif cmd == "save" or cmd.startswith("save "):
+                    name = cmd[5:].strip() if len(cmd) > 5 else ""
+                    if not name:
+                        print("  Usage: /save <name>  — save conversation to ~/.mite/conversations/<name>.json")
+                        continue
+                    msg = _save_conversation(name, history)
+                    print(f"  \U0001f4be {msg}")
+                    continue
+                elif cmd == "load" or cmd.startswith("load "):
+                    name = cmd[5:].strip() if len(cmd) > 5 else ""
+                    if not name:
+                        print("  Usage: /load <name>  — load conversation from ~/.mite/conversations/<name>.json")
+                        continue
+                    loaded = _load_conversation(name)
+                    if loaded is None:
+                        print(f"  \u26a0 No saved conversation '{name}'.")
+                        print(f"     See /list for available conversations.")
+                        continue
+                    history = loaded
+                    print(f"  \U0001f4c2 Loaded {len(history)} messages from '{name}'")
+                    continue
+                elif cmd == "list":
+                    names = _list_conversations()
+                    if names:
+                        print(f"  \U0001f4c1 Saved conversations in ~/.mite/conversations/:")
+                        for n in names:
+                            print(f"     \u2022 {n}")
+                    else:
+                        print("  No saved conversations yet.")
+                        print("  Use /save <name> to save the current conversation.")
+                    continue
+                elif cmd == "config" or cmd.startswith("config "):
+                    rest = cmd[7:].strip() if len(cmd) > 7 else ""
+                    if not rest:
+                        print(f"  \u2699\ufe0f  Config  ({_CONFIG_FILE}):")
+                        if config:
+                            for k, v in config.items():
+                                print(f"     {k}: {v}")
+                        else:
+                            print("     (defaults — no config saved yet)")
+                        print(f"     Use /config <key> <value> to set")
+                        print(f"     Current model: {model}")
+                        print(f"     Current sysinfo: {show_sysinfo}")
+                        print(f"     Current auto_continue: {auto_continue}")
+                        continue
+                    if "=" in rest:
+                        key, _, value = rest.partition("=")
+                    else:
+                        parts = rest.split(" ", 1)
+                        key = parts[0]
+                        value = parts[1] if len(parts) > 1 else ""
+                    key = key.strip().lower()
+                    value = value.strip()
+                    if not key or not value:
+                        print("  Usage: /config <key> <value>")
+                        print("  Keys: model, show_sysinfo (true/false), auto_continue (true/false)")
+                        print(f"  Example: /config model qwen2.5:3b")
+                        continue
+                    config[key] = value
+                    _save_config(config)
+                    print(f"  \u2705 Config updated: {key} = {value}")
+                    if key == "model":
+                        model = value
+                        print(f"  Switched to: {model}")
+                    elif key == "show_sysinfo":
+                        show_sysinfo = value.lower() in ("true", "1", "yes")
+                        print(f"  sysinfo {'enabled' if show_sysinfo else 'disabled'} (will apply on next launch)")
+                    elif key == "auto_continue":
+                        auto_continue = value.lower() in ("true", "1", "yes")
+                        print(f"  auto_continue {'enabled' if auto_continue else 'disabled'}")
+                    continue
                 else:
                     print(f"  Unknown: {user_input}")
                     continue
-
-        # Track last prompt for /redo (raw input, before AGENT.md augmentation)
         last_prompt = user_input
-
-        # Prepend AGENT.md instructions if available (re-reads on every prompt)
         agent_content = _load_agent_md()
         if agent_content:
             user_input = f"[AGENT.md instructions]\n{agent_content}\n\n[Task]\n{user_input}"
-
         history.append({"role": "user", "content": user_input})
-
-        # --- Run model loop (auto-follow-up after tool calls) ---
-        auto_steps_remaining = 5  # Max auto-follow-up steps per user input
+        max_auto_steps = 20 if auto_continue else 5
+        auto_steps_remaining = max_auto_steps
         while True:
             messages = prompts.build_prompt(history, system_prompt=system_prompt)
-
             print(f"  \u23f3", end="", flush=True)
             start_time = time.time()
             response = _call_ollama(messages, model, host)
-
             if response is None:
                 print("")
                 history.pop()
                 break
-
             elapsed = time.time() - start_time
             print(f" ({elapsed:.1f}s)")
-
-            # Try to parse as tool call
             tool_call = _parse_tool_call(response)
-
             if tool_call:
                 tool_name = tool_call["tool"]
                 tool_args = tool_call["args"]
                 thought = tool_call.get("thought", "")
-
                 if thought:
                     print(f"  \U0001f4ad {thought[:200]}")
-
-                # Handle finish
                 if tool_name == "finish":
                     msg = tool_args.get("message", "")
                     print(f"\n  \u2705 {msg}" if msg else "\n  \u2705 Done!")
                     history.append({"role": "assistant", "content": response.strip()})
                     step += 1
-                    return  # Exit loop entirely on finish
-
+                    return
                 print(f"  \U0001f527 {tool_name}({_args_str(tool_args)})")
-
-                # Execute
                 result = tools.execute_tool(tool_name, tool_args)
                 print(f"\n{result[:1200]}")
-
-                # Add response + result to history
                 history.append({"role": "assistant", "content": response.strip()})
                 truncated = result[:800]
                 if len(result) > 800:
@@ -573,27 +619,58 @@ def run_loop(model: str, host: str, initial_task: str = None, show_sysinfo: bool
                 history.append({"role": "system", "content": f"Result:\n{truncated}"})
                 _trim_history(history)
                 step += 1
-
-                # Auto-follow-up: let model process the result
                 auto_steps_remaining -= 1
                 if auto_steps_remaining <= 0:
-                    break  # Back to user input
-                continue  # Auto: call model again with result
-
+                    if auto_continue:
+                        print(f"  \u26a0 Auto-continue limit ({max_auto_steps} steps) reached. Type more to continue.")
+                    break
+                continue
             else:
-                # Natural language response \u2014 done with this turn
                 print(f"\n{response.strip()[:800]}")
                 history.append({"role": "assistant", "content": response.strip()})
                 _trim_history(history)
                 step += 1
-                break  # Back to user input
-
+                if auto_continue:
+                    signal = _detect_finish_or_question(response)
+                    if signal == "finish":
+                        print("  (auto-continue: model signaled completion)")
+                        break
+                    elif signal == "question":
+                        print("  (auto-continue: waiting for your response)")
+                        break
+                    else:
+                        auto_steps_remaining -= 1
+                        if auto_steps_remaining <= 0:
+                            print(f"  \u26a0 Auto-continue limit ({max_auto_steps} steps) reached. Type more to continue.")
+                            break
+                        recent_nl = 0
+                        for m in reversed(history):
+                            if m["role"] == "assistant":
+                                if not _parse_tool_call(m["content"]):
+                                    recent_nl += 1
+                                else:
+                                    break
+                                if recent_nl >= 3:
+                                    break
+                        if recent_nl >= 3:
+                            print("  \u26a0 Agent seems stuck (3+ responses without action). Type to guide it.")
+                            break
+                        print("  \u23e9 (auto-continue)")
+                        continue_prompt = (
+                            "continue. "
+                            "Use TOOL read_file, write_file, patch, shell, or search to make progress. "
+                            "When the task is complete, use TOOL finish."
+                        )
+                        history.append({"role": "user", "content": continue_prompt})
+                        _trim_history(history)
+                        continue
+                else:
+                    break
         if step > 50:
             print("\n  \u26a0 Many steps. Use /reset for a new task.")
 
 
 def _args_str(args: dict) -> str:
-    """Short arg display."""
     parts = []
     for k, v in args.items():
         v_str = str(v)
@@ -604,10 +681,8 @@ def _args_str(args: dict) -> str:
 
 
 def _trim_history(history: list[dict], max_msgs: int = 6):
-    """Ultra-aggressive trim for tiny context windows."""
     if len(history) <= max_msgs:
         return
-    # Keep system + last max_msgs-1 entries
     new_hist = []
     if history and history[0]["role"] == "system":
         new_hist.append(history[0])
@@ -619,23 +694,41 @@ def _trim_history(history: list[dict], max_msgs: int = 6):
 def _show_help():
     print("""
   Mite Commands:
-    /exit       - Exit
-    /reset      - Reset conversation
-    /redo (/r)  - Re-run the last prompt
-    /history    - Show recent context
-    /model <n>  - Switch model
-    /agent      - Show AGENT.md instructions (re-reads on every prompt)
-    /help       - This help
+    /exit             - Exit
+    /reset            - Reset conversation
+    /redo (/r)        - Re-run the last prompt
+    /history          - Show recent context
+    /model <n>        - Switch model (for current session)
+    /agent            - Show AGENT.md instructions (re-reads on every prompt)
+    /save <name>      - Save conversation to ~/.mite/conversations/<name>.json
+    /load <name>      - Load a saved conversation
+    /list             - List saved conversations
+    /config           - Show current config (~/.mite/config.json)
+    /config <k> <v>   - Set a config value (model, show_sysinfo, auto_continue)
+    /help             - This help
+
+  Auto-Continue:
+    By default, Mite auto-sends "continue" to the agent after each step
+    until it finishes or asks a question. This lets multi-step tasks
+    complete without you typing after every tool call.
+    Disable with: /config auto_continue false
+    Or: mite --no-auto-continue
 
   AGENT.md:
-    Create AGENT.md in the current directory (or .mite/AGENT.md)
-    to persist instructions the AI receives before every prompt.
-    Great for project conventions, style guides, or role definitions.
+    Create AGENT.md in the current directory (project-level) or in
+    ~/.mite/AGENT.md (user-level, persistent) to persist instructions
+    the AI receives before every prompt.
+    Priority: ./AGENT.md > ./.mite/AGENT.md > ~/.mite/AGENT.md
 
   System Info:
     By default, Mite shows your platform, user, hostname, memory,
     and disk at startup. This info is also injected into every prompt
     so the AI can use it. Disable with: mite --no-sysinfo
+    Or: /config show_sysinfo false
+
+  Conversations:
+    Your conversations, AGENT.md, and preferences live under ~/.mite/.
+    Use /save to save the current conversation and /load to restore it.
 
   Tip: Press \u2191 (up arrow) to recall previous prompts.
   Tools: read_file, write_file, patch, shell, search, finish

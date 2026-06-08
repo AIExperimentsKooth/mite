@@ -1,7 +1,3 @@
-"""
-CLI entry point for Mite.
-Parses arguments, runs setup if needed, then starts the interactive loop.
-"""
 import argparse
 import sys
 import os
@@ -19,8 +15,10 @@ Examples:
   mite "fix the bug in main.py" Run a single task
   mite --model qwen2.5:3b       Use a larger model
   mite --setup                  Run setup only (install Ollama, pull model)
+  mite --update                 Update Mite to the latest version
   mite --no-sysinfo             Skip system information report
   mite --host http://192.168.1.5:11434  Connect to remote Ollama
+  mite --no-auto-continue      Disable auto-continue (wait after every step)
         """
     )
     parser.add_argument("task", nargs="?", help="Task to execute (omit for interactive mode)")
@@ -30,6 +28,8 @@ Examples:
                         help="Ollama API host (default: http://localhost:11434, env: OLLAMA_HOST)")
     parser.add_argument("--setup", action="store_true",
                         help="Run setup (install Ollama, pull model) then exit")
+    parser.add_argument("--update", action="store_true",
+                        help="Update Mite to the latest version from GitHub")
     parser.add_argument("--version", "-v", action="store_true",
                         help="Show version and exit")
     parser.add_argument("--yes", "-y", action="store_true",
@@ -40,14 +40,13 @@ Examples:
                         help="Show debug information")
     parser.add_argument("--no-sysinfo", action="store_true",
                         help="Skip system information report at startup")
-
+    parser.add_argument("--no-auto-continue", action="store_true",
+                        help="Disable auto-continue (wait for input after every step)")
     args = parser.parse_args()
-
     if args.version:
         print(f"Mite v{__version__}")
         print(f"Model: {args.model}")
         return
-
     if args.debug:
         print(f"Mite v{__version__}")
         print(f"Model: {args.model}")
@@ -55,22 +54,20 @@ Examples:
         print(f"Task: {args.task}")
         print(f"Python: {sys.version}")
         return
-
-    # Auto-setup: run setup if needed, unless --no-setup
+    if args.update:
+        _run_update(args.yes)
+        return
     if not args.no_setup:
         _auto_setup(args.model, args.host, args.yes)
-
-    # If --setup only, we're done
     if args.setup:
         return
-
-    # Start the interactive loop
     try:
         core.run_loop(
             model=args.model,
             host=args.host,
             initial_task=args.task,
-            show_sysinfo=not args.no_sysinfo
+            show_sysinfo=not args.no_sysinfo,
+            auto_continue=not args.no_auto_continue
         )
     except KeyboardInterrupt:
         print("\n  Interrupted.")
@@ -83,14 +80,9 @@ Examples:
 
 
 def _auto_setup(model: str, host: str, auto_confirm: bool = False):
-    """Check if setup is needed, and run it if so."""
     import subprocess
     import shutil
-
-    # Check if Ollama is available
     ollama_ok = shutil.which("ollama") is not None
-
-    # Check if model is already pulled
     model_pulled = False
     if ollama_ok:
         try:
@@ -102,7 +94,6 @@ def _auto_setup(model: str, host: str, auto_confirm: bool = False):
                 model_pulled = True
         except Exception:
             pass
-
     if not ollama_ok:
         print("  \u26a0 Ollama not found. Setup required.")
         if not auto_confirm:
@@ -124,9 +115,48 @@ def _auto_setup(model: str, host: str, auto_confirm: bool = False):
         setup.pull_model(model)
         setup.test_model(model)
     else:
-        # Ensure Ollama is running
         setup.start_ollama()
         setup.wait_for_ollama()
+
+
+def _run_update(auto_confirm: bool = False):
+    import subprocess
+    import os
+    search_paths = [
+        os.path.join(os.path.dirname(__file__), "..", "update.sh"),
+        os.path.join(os.getcwd(), "update.sh"),
+    ]
+    update_script = None
+    for p in search_paths:
+        p = os.path.abspath(p)
+        if os.path.isfile(p):
+            update_script = p
+            break
+    if not update_script:
+        print("  \u26a0 Cannot find update.sh.")
+        print("     Download it from: https://github.com/AIExperimentsKooth/mite")
+        print("     Or run: bash <(curl -fsSL https://raw.githubusercontent.com/AIExperimentsKooth/mite/main/update.sh)")
+        return
+    print(f"  Running: {update_script}\n")
+    cmd = ["bash", update_script]
+    if auto_confirm:
+        cmd.append("--yes")
+    try:
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"\n  \u26a0 Update failed (exit code {e.returncode}).")
+        print("  Your ~/.mite/ userdata was backed up and restored automatically.")
+        if e.returncode == 128:
+            print()
+            print("  This is usually a GitHub authentication issue for private repos.")
+            print("  To fix, run with a token:")
+            print("    MITE_TOKEN=ghp_xxx mite --update")
+            print("  Or authenticate gh CLI:")
+            print("    gh auth login")
+        sys.exit(1)
+    except KeyboardInterrupt:
+        print("\n  Update cancelled.")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

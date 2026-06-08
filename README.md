@@ -1,92 +1,260 @@
-# Mite
+# Mite - Micro AI Terminal Engineer
 
-Micro AI Terminal Engineer — a lightweight AI coding assistant designed for small local models (0.5B–3B parameters).
+**Tiny AI coding assistant for lightweight models** (Qwen2.5:0.5B, Qwen2.5:1.5B, etc.)
 
-## Design Philosophy
+Mite is a Python-based AI coding assistant designed for small models that can run on modest hardware. It works like Claude Code or Codex but is optimized for models as small as **0.5B parameters**.
 
-Most AI coding assistants (Claude Code, Codex, Hermes) require powerful models with JSON function calling. Mite is built for the opposite end of the spectrum — tiny models that fit on a Raspberry Pi, run on a CPU, and respond in seconds.
-
-### Key Design Choices for Tiny Models
-
-- **Single-line TOOL format**: `TOOL read_file path=main.py` instead of JSON — tiny models produce structured text much more reliably than JSON
-- **Ultra-concise system prompt**: Under 200 tokens — every word matters for a 0.5B model
-- **Aggressive context trimming**: Keeps only 4 recent messages — tiny context windows can't handle long histories
-- **Low temperature (0.1)**: Minimizes creative drift in structured output
-- **Short response limit**: 512 tokens max — small models degenerate with long generations
-- **Structured noise filtering**: Strips chat contamination common in tiny model outputs
-
-## Quick Start
-
-```bash
-# Run the auto-setup (installs Ollama + pulls model)
-./setup.sh
-
-# Or with Python directly
-python -m mite
-
-# Run a single task
-python -m mite "list all Python files in this project"
+```
+$ mite "add error handling to main.py"
+┃ ⏳ thinking... done (2.3s)
+┃ 🔧 read_file(path=main.py)
+┃ ⏳ executing... done (0.1s)
+┃ 💭 I see the file. Let me add error handling around the file read.
+┃ 🔧 patch(path=main.py, old_string=open(path), new_string=try:\n    open(path)\nexcept...)
 ```
 
-## Requirements
+## Features
 
-- Python 3.10+
-- Ollama (auto-installed by setup.sh)
-- Internet connection (first run only — pulls the model)
+- 🪶 **Ultra-lightweight** — works with Qwen2.5:0.5B (500M params), runs on 4GB RAM
+- 🤖 **Any Ollama model** — use whatever model you have: qwen2.5, llama3.2, phi, gemma
+- 🔧 **Full tool set** — read, write, edit files, run shell commands, search code
+- 🚀 **Auto-configures** — one command installs everything
+- 💬 **Interactive REPL** — chat-like interface with command history (↑ arrow)
+- 📁 **Userdata directory** — conversations, AGENT.md, and preferences live in `~/.mite/`
+- 💾 **Save & load conversations** — save sessions, resume later
+- ⚙️ **Persistent config** — preferences survive across sessions
+- 📋 **AGENT.md support** — persistent instructions at project or user level
+- 🧩 **Single python package** — easy to hack on
+- ⏩ **Auto-continue** — agent keeps working autonomously until done or stuck
 
-## Commands
+## Quick Install
+
+```bash
+# One-liner:
+git clone https://github.com/your/mite.git
+cd mite
+bash setup.sh
+
+# Then:
+mite "what's in this directory"
+```
+
+Or without cloning:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/your/mite/main/setup.sh | bash
+```
+
+## Usage
+
+```bash
+# Interactive mode
+mite
+
+# Run a single task
+mite "fix the bug in main.py"
+
+# Use a different model
+mite --model qwen2.5:1.5b
+
+# Use a remote Ollama instance
+mite --host http://192.168.1.5:11434
+
+# Run setup only
+mite --setup
+
+# Skip auto-setup checks
+mite --no-setup
+
+# Disable auto-continue (wait after every step)
+mite --no-auto-continue
+```
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MITE_MODEL` | `qwen2.5:0.5b` | Default Ollama model |
+| `OLLAMA_HOST` | `http://localhost:11434` | Ollama API endpoint |
+| `MITE_TOKEN` | — | GitHub token for private repo updates |
+| `GITHUB_TOKEN` | — | Alternative GitHub token for updates |
+
+### Updating Mite
+
+Mite can update itself from GitHub:
+
+```bash
+# Via CLI (recommended):
+mite --update
+
+# Or standalone script:
+bash update.sh
+
+# For private repos, provide a GitHub token:
+MITE_TOKEN=ghp_xxx mite --update
+```
+
+The update script:
+1. **Backs up** `~/.mite/` (conversations, config, AGENT.md)
+2. **Fetches** the latest code from GitHub
+3. **Restores** your userdata
+4. **Re-runs** setup
+
+On failure, it automatically restores the backup. No data loss.
+
+### Interactive Commands
 
 | Command | Description |
 |---------|-------------|
 | `/exit` | Exit Mite |
 | `/reset` | Reset conversation |
+| `/history` | Show recent conversation |
+| `/model <name>` | Switch models mid-session |
+| `/agent` | Show current AGENT.md instructions |
+| `/save <name>` | Save conversation to `~/.mite/conversations/` |
+| `/load <name>` | Load a saved conversation |
+| `/list` | List saved conversations |
+| `/config` | Show current preferences |
+| `/config <k> <v>` | Set a preference (e.g., `model`, `show_sysinfo`) |
 | `/redo` (`/r`) | Re-run the last prompt |
-| `/history` | Show recent context |
-| `/model <name>` | Switch model (e.g., `/model qwen2.5:3b`) |
-| `/agent` | View AGENT.md instructions |
-| `/help` | Help text |
+| `/help` | Show help |
 
-## Features
+### Auto-Continue
 
-- **Up arrow history**: Press ↑ to recall previous prompts
-- **`/redo`**: Retry the last prompt instantly
-- **AGENT.md**: Create an `AGENT.md` file in your project root for persistent instructions the AI receives before every prompt
-- **System info**: Automatically reports platform, memory, and disk at startup (disable with `--no-sysinfo`)
-- **Auto-setup**: Installs Ollama and pulls the model on first run
-- **Zero external dependencies**: Pure Python stdlib — no pip install needed
+By default, Mite **automatically prompts the agent to continue** after each step until it finishes the task or asks you a question. This means you can give a multi-step task and Mite will autonomously:
 
-## Tools Available to the AI
+1. Read files, search code, run tools
+2. Interpret results and decide what to do next
+3. Keep going through tool call results and natural language responses
+4. **Stop** when the task is complete or when it needs your input
 
-- `read_file` — Read a file
-- `write_file` — Write/create a file
-- `patch` — Edit a file (find and replace)
-- `shell` — Run a shell command
-- `search` — Search file contents or find files
-- `finish` — Mark task complete
+The `⏩ (auto-continue)` indicator shows when the agent is driving itself between steps.
 
-## Example
+Auto-continue has smart safeguards:
+- **Stuck detection**: If the agent produces 3+ responses without using a tool, it stops and waits for you to guide it.
+- **Step limit**: Caps at 20 continuous steps to prevent runaway loops.
+- **Question detection**: If the model asks you something (contains `?` or phrases like "would you like"), it stops and waits for your answer.
 
-```
-$ python -m mite
-  🤖 Mite active | model: qwen2.5:0.5b
-  🖥  System info:
-     Debian GNU/Linux 12 (bookworm)
-     User: user
-     Hostname: my-machine
-     Available memory: 4.7 GB
-     Available storage: 45.2 GB (of 120.5 GB)
-  Commands: /exit  /reset  /history  /redo  /agent  /help
-  Type your task or 'help' to start.
+```bash
+# Disable auto-continue (wait after every step)
+mite --no-auto-continue
 
-┃ show me all files in this project
+# Or disable mid-session via config:
+/config auto_continue false
 ```
 
-## Configuration
+### Userdata Directory (`~/.mite/`)
 
-| Env Var | Default | Description |
-|---------|---------|-------------|
-| `MITE_MODEL` | `qwen2.5:0.5b` | Ollama model to use |
-| `OLLAMA_HOST` | `http://localhost:11434` | Ollama API endpoint |
+Mite stores your data in `~/.mite/`:
+
+| Path | Description |
+|------|-------------|
+| `~/.mite/config.json` | Preferences (model, show_sysinfo, auto_continue) — set via `/config` |
+| `~/.mite/conversations/` | Saved conversations — use `/save` and `/load` |
+| `~/.mite/AGENT.md` | User-level persistent instructions — loaded on every prompt |
+| `~/.mite_history` | Arrow-key command history |
+
+**AGENT.md priority**: `./AGENT.md` > `./.mite/AGENT.md` > `~/.mite/AGENT.md`
+
+Example:
+```
+# Save a conversation
+┃ /save my-project-setup
+  💾 Saved 12 messages to 'my-project-setup'
+
+# List saved conversations
+┃ /list
+  📁 Saved conversations in ~/.mite/conversations/:
+     • my-project-setup
+
+# Load later
+┃ /load my-project-setup
+  📂 Loaded 12 messages from 'my-project-setup'
+```
+
+## How It Works
+
+Mite uses a **structured output format** optimized for small models:
+
+1. You type a task or question
+2. Mite sends it to the local model
+3. The model responds with either:
+   - A natural language answer, OR
+   - A tool call in structured format:
+     ```
+     THOUGHT: I should read the file first
+     TOOL: read_file
+     path: main.py
+     ```
+4. Mite parses the tool call, executes it, shows you the result
+5. The result is fed back to the model for the next step
+
+This `THOUGHT/TOOL/ARGS` format is much easier for small models to produce reliably than JSON function calling.
+
+## Recommended Models
+
+| Model | Params | RAM | Speed | Best for |
+|-------|--------|-----|-------|----------|
+| `qwen2.5:0.5b` | 0.5B | ~1GB | ⚡⚡⚡ | Basic file ops, simple tasks |
+| `qwen2.5:1.5b` | 1.5B | ~2GB | ⚡⚡ | Good balance for most tasks |
+| `qwen2.5:3b` | 3B | ~3GB | ⚡ | Complex reasoning, larger files |
+| `llama3.2:1b` | 1B | ~2GB | ⚡⚡ | Multi-turn conversations |
+| `phi3:mini` | 3.8B | ~4GB | ⚡ | Full-featured coding |
+
+## Architecture
+
+```
+mite/
+├── bin/mite           # Shell entry point
+├── mite/
+│   ├── __init__.py    # Package metadata
+│   ├── __main__.py    # python -m mite
+│   ├── cli.py         # CLI argument parsing + auto-setup
+│   ├── core.py        # Main interaction loop
+│   ├── tools.py       # File/shell/search tool implementations
+│   ├── prompts.py     # System prompts optimized for small models
+│   └── setup.py       # Ollama install + model pull
+├── update.sh           # Self-update script (backup → clone → restore)
+├── setup.sh            # One-click setup script
+└── README.md
+```
+
+## Why Small Models?
+
+Not everyone has a GPU with 24GB of VRAM. Mite is for:
+
+- **Laptops without dedicated GPUs** — Qwen2.5:0.5B runs on CPU with 4GB RAM
+- **Raspberry Pi / edge devices** — the 0.5B model fits on an RPi 5
+- **Privacy-first setups** — everything runs locally, no data leaves your machine
+- **Quick tasks** — for simple code edits, a 0.5B model responds in 1-3 seconds
+
+## Development
+
+```bash
+# Setup
+cd mite
+python3 -m venv .venv
+source .venv/bin/activate
+
+# Run directly
+python -m mite
+
+# Test specific models
+MITE_MODEL=qwen2.5:1.5b python -m mite "list all python files"
+```
+
+## How It Differs From Claude Code / Codex
+
+| Feature | Claude Code | Codex | **Mite** |
+|---------|-------------|-------|----------|
+| Model size | ~100B+ | ~100B+ | **0.5B-3B** |
+| Local-only | ❌ | ❌ | **✅** |
+| Auto-setup | Manual | Manual | **✅ One command** |
+| RAM needed | 8GB+ | 8GB+ | **~1GB** |
+| GPU needed | Yes | Yes | **Optional** (CPU ok) |
+| Tool format | JSON | JSON | **Simple text** (small models) |
+| Speed | Fast (API) | Fast (API) | **Fast (local)** |
 
 ## License
+
 MIT
