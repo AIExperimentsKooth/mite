@@ -572,6 +572,11 @@ def run_loop(model: str, host: str, initial_task: str = None,
     _setup_readline()
     _ensure_userdata_dir()
 
+    # Set working directory to ~/.mite/project-x/ (creates if missing)
+    workspace = os.path.join(os.path.expanduser("~/.mite"), "project-x")
+    os.makedirs(workspace, exist_ok=True)
+    os.chdir(workspace)
+
     config = _load_config()
     if config.get("model"):
         model = config["model"]
@@ -612,7 +617,7 @@ def run_loop(model: str, host: str, initial_task: str = None,
     if agent_md_active:
         print(f"  \U0001f4cb AGENT.md loaded at startup (re-reads on /reset)")
     if sysinfo:
-        print(f"  \U0001f5a5  System info:")
+        print(f"  🖥  System info:")
         for line in sysinfo.splitlines():
             print(f"     {line}")
     if auto_continue:
@@ -622,6 +627,7 @@ def run_loop(model: str, host: str, initial_task: str = None,
     if schedule_count:
         print(f"  \U0001f4c5 {schedule_count} scheduled task{'s' if schedule_count != 1 else ''} (\u2014 /schedule list)")
     print(f"  \U0001f4c1 ~/.mite/ ({convo_count} saved conversations)")
+    print(f"  \U0001f4c2 Workspace: ~/.mite/project-x/")
     print(f"  Commands: /exit  /reset  /history  /redo  /agent  /save  /load  /list  /config  /queue  /schedule  /help")
     if initial_task:
         print(f"  Task: {initial_task}\n")
@@ -866,7 +872,7 @@ def run_loop(model: str, host: str, initial_task: str = None,
                     else:
                         print("  Usage: /schedule add <interval> <task>")
                         print("  Example: /schedule add every 30m check disk space")
-                elif qargs == "list":
+                elif sargs == "list":
                     items = task_schedule.list()
                     if items:
                         print(f"  \U0001f4c5 Scheduled tasks ({len(items)}):")
