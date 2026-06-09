@@ -15,7 +15,7 @@ $ mite "add error handling to main.py"
 
 ## Features
 
-- 🪆 **Ultra-lightweight** — works with Qwen2.5:0.5B (500M params), runs on 4GB RAM
+- 🫆 **Ultra-lightweight** — works with Qwen2.5:0.5B (500M params), runs on 4GB RAM
 - 🤖 **Any Ollama model** — use whatever model you have: qwen2.5, llama3.2, phi, gemma
 - 🔧 **Full tool set** — read, write, edit files, run shell commands, search code
 - 🚀 **Auto-configures** — one command installs everything
@@ -247,6 +247,236 @@ Mite uses a **structured output format** optimized for small models:
 5. The result is fed back to the model for the next step
 
 This `THOUGHT/TOOL/ARGS` format is much easier for small models to produce reliably than JSON function calling.
+
+## Tools Reference
+
+Mite provides six tools the model can use. Each tool call is parsed from a simple text format — no JSON function calling required.
+
+### Tool Call Formats
+
+The parser accepts many formats so small models can express tool calls naturally:
+
+| Format | Example |
+|--------|---------|
+| `TOOL name(args)` | `TOOL read_file(path="main.py")` |
+| `TOOL: name(args)` | `TOOL: write_file(path="hello.txt", content="hi")` |
+| `name(args)` (bare) | `read_file(path="main.py")` |
+| `TOOL name key=val` | `TOOL shell command="ls -la"` |
+| `name key=val` (bare) | `write_file path=hello.txt content="hello world"` |
+| Bare `finish` / `DONE` | finish |
+
+### Tool Aliases
+
+| Alias | Maps To | Description |
+|-------|---------|-------------|
+| `read` | `read_file` | Read a file |
+| `write` | `write_file` | Write a file |
+| `edit` | `patch` | Edit a file |
+| `search` / `grep` | `search_files` | Search code |
+| `execute` / `run` / `cmd` | `shell` | Run a command |
+
+---
+
+### `read_file` — Read a file
+
+Reads a file and displays it with line numbers. Handles errors (file not found, permission denied) gracefully.
+
+**Arguments:**
+
+| Arg | Required | Default | Description |
+|-----|----------|---------|-------------|
+| `path` | Yes | — | File path to read |
+| `offset` | No | `1` | Starting line number |
+| `limit` | No | `500` | Max lines to return |
+
+**Examples (as the model would call it):**
+```
+TOOL read_file(path="main.py")
+read_file(path="src/utils.py")
+TOOL: read path="config.json"
+```
+
+**Output:**
+```
+### main.py (42 lines, showing 1-42)
+     1|import os
+     2|import sys
+     ...
+```
+
+---
+
+### `write_file` — Write a file
+
+Creates a new file or overwrites an existing one. Creates parent directories automatically. Auto-decodes `\n` and `\t` escape sequences from the model's single-line output into real newlines and tabs.
+
+**Arguments:**
+
+| Arg | Required | Default | Description |
+|-----|----------|---------|-------------|
+| `path` | Yes | — | File path to write |
+| `content` | Yes | — | File content (supports `\n` escapes) |
+
+**Examples (as the model would call it):**
+```
+TOOL write_file(path="hello.txt", content="Hello, world!")
+write_file path=script.sh content="#!/bin/bash\necho hi"
+TOOL: write path=config.json content="{\"key\": \"value\"}"
+```
+
+**Output:**
+```
+OK: Wrote 47 bytes to /home/user/.mite/project-x/hello.txt
+```
+
+---
+
+### `patch` — Find and replace in a file
+
+Searches for a string in a file and replaces it. This is the primary way the model edits existing code. Supports `replace_all` to change every occurrence.
+
+**Arguments:**
+
+| Arg | Required | Default | Description |
+|-----|----------|---------|-------------|
+| `path` | Yes | — | File path to edit |
+| `old_string` | Yes | — | Exact text to find |
+| `new_string` | No | `""` | Replacement text |
+| `replace_all` | No | `false` | Replace all occurrences (`true`/`false`) |
+
+**Examples (as the model would call it):**
+```
+TOOL patch(path="main.py", old_string="print('hello')", new_string="print('hello world')")
+patch path=app.py old_string="def old_func(" new_string="def new_func("
+edit path=server.js old_string="port = 3000" new_string="port = process.env.PORT || 3000"
+```
+
+**Output:**
+```
+OK: Applied patch to main.py (+11 chars)
+```
+
+> **Tip:** The `edit` alias is especially helpful for small models that confuse `patch` with `write`. All aliases work in every format.
+
+---
+
+### `shell` — Run a shell command
+
+Executes a shell command and returns its stdout, stderr, and exit code. Includes safety guards against destructive commands.
+
+**Arguments:**
+
+| Arg | Required | Default | Description |
+|-----|----------|---------|-------------|
+| `command` | Yes | — | Shell command to run |
+| `timeout` | No | `60` | Max seconds before abort |
+
+**Safety:** Commands matching dangerous patterns (`rm -rf /`, `mkfs.`, `dd if=`, fork bombs) are **blocked** and return an error instead of executing.
+
+**Examples (as the model would call it):**
+```
+TOOL shell(command="ls -la")
+shell command="python -m pytest tests/"
+run command="git status"
+TOOL: execute command="grep -rn 'TODO' src/"
+cmd command="df -h"
+```
+
+**Output:**
+```
+EXIT: 0
+total 24
+drwxr-xr-x  2 user user 4096 ...
+-rw-r--r--  1 user user  147 ...
+```
+
+---
+
+### `search` — Search code or find files
+
+Searches file contents with `grep` or finds files by glob pattern. The most flexible tool — switches behaviour based on the `target` parameter.
+
+**Arguments:**
+
+| Arg | Required | Default | Description |
+|-----|----------|---------|-------------|
+| `pattern` | Yes | — | Search pattern (regex for content, glob for files) |
+| `target` | No | `content` | `"content"` = grep inside files, `"files"` = find files by name |
+| `path` | No | `"."` | Directory to search |
+| `file_glob` | No | — | File filter (e.g., `"*.py"`) |
+| `limit` | No | `30` | Max results to return |
+
+**Examples (as the model would call it):**
+```
+# Grep for a function definition
+search(pattern="def main", path="src/")
+TOOL search pattern="import os" file_glob="*.py"
+
+# Find files by name
+search(target="files", pattern="*.py")
+grep pattern="TODO" path="."
+search_files pattern="README*" target="files"
+```
+
+**Output (content search):**
+```
+### 5 matches for 'def main' (showing 5):
+  src/main.py:42:def main():
+  src/cli.py:12:def main():
+...
+```
+
+**Output (file search):**
+```
+### 8 files matching '*.py'
+  main.py
+  src/utils.py
+...
+```
+
+---
+
+### `finish` — Mark task complete
+
+Signals that the current task is done. This ends the auto-continue loop and returns control to the user prompt. The program **does not exit** — you stay in the interactive REPL.
+
+**Arguments:**
+
+| Arg | Required | Default | Description |
+|-----|----------|---------|-------------|
+| `message` | No | `""` | Optional completion message |
+
+**Examples (as the model would call it):**
+```
+finish
+TOOL finish
+TOOL finish(message="Added error handling to main.py")
+DONE
+```
+
+**Output:**
+```
+✅ finish
+```
+
+> **Only explicit `finish` / `DONE` / `TOOL finish` triggers completion.** Casual words like "done", "completed", or "let me finish" are ignored. This prevents false-positive task termination.
+
+---
+
+### Display Format
+
+When Mite executes a tool, it shows a compact one-liner with the file path first (when applicable):
+
+```
+📄 main.py            ←  read_file
+📝 hello.txt          ←  write_file
+🔧 utils.py           ←  patch
+$ ls -la
+🔍 "def main"  in  src/
+✅ finish
+```
+
+The display is user-facing only — the model always sees the full tool result.
 
 ## Recommended Models
 
