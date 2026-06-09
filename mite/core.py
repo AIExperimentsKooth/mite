@@ -106,7 +106,7 @@ def _save_conversation(name, messages):
     path = os.path.join(_CONV_DIR, f"{name}.json")
     with open(path, "w") as f:
         json.dump(messages, f, indent=2)
-    print(f"  ✅ Saved to {name}")
+    print(f"  Saved to {name}")
 
 
 def _load_conversation(name):
@@ -115,7 +115,7 @@ def _load_conversation(name):
         with open(path) as f:
             return json.load(f)
     except FileNotFoundError:
-        print(f"  ❌ No saved conversation '{name}'")
+        print(f"  No saved conversation '{name}'")
         return None
 
 
@@ -266,12 +266,12 @@ _TOOLS = {
 # ---------------------------------------------------------------------------
 
 _TOOL_DISPLAY = {
-    "read_file": "\U0001f4c4",  # 📄
-    "write_file": "\U0001f4dd",  # 📝
-    "patch": "\U0001f527",  # 🔧
+    "read_file": "\U0001f4c4",
+    "write_file": "\U0001f4dd",
+    "patch": "\U0001f527",
     "shell": "$",
-    "search_files": "\U0001f50d",  # 🔍
-    "finish": "\u2705",  # ✅
+    "search_files": "\U0001f50d",
+    "finish": "\u2705",
 }
 
 
@@ -302,7 +302,7 @@ class TaskQueue:
     """Simple FIFO task queue persisted to JSON."""
     def __init__(self, path):
         self.path = path
-        self.tasks = []  # list of {id, content, status}
+        self.tasks = []
         self._running = False
         self._idx = 0
         self.load()
@@ -366,7 +366,7 @@ class TaskSchedule:
     """Scheduled tasks persisted to JSON."""
     def __init__(self, path):
         self.path = path
-        self.tasks = []  # list of {id, content, interval_seconds, next_run, status}
+        self.tasks = []
         self.load()
 
     def load(self):
@@ -488,7 +488,7 @@ def _call_ollama(model, messages, host="http://localhost:11434", timeout=300):
 
 
 # ---------------------------------------------------------------------------
-# Tool parsing (lenient — handles many formats)
+# Tool parsing (lenient -- handles many formats)
 # ---------------------------------------------------------------------------
 
 _TOOL_ALIASES = {
@@ -531,7 +531,7 @@ def _parse_tool_call(text):
         args = _parse_args(args_raw)
         return (name, args)
 
-    # Strategy 2: just name(args) — no TOOL prefix
+    # Strategy 2: just name(args) -- no TOOL prefix
     m = re.match(r"^(\w+)\((.+)\)", text)
     if m:
         name = m.group(1).lower()
@@ -553,7 +553,7 @@ def _parse_tool_call(text):
         if name in _TOOLS:
             return (name, args)
 
-    # Strategy 4: bare name key=val (no TOOL, no parens) — lenient
+    # Strategy 4: bare name key=val (no TOOL, no parens) -- lenient
     m = re.match(r"^(\w+)\s+(.+)", text)
     if m:
         name = m.group(1).lower()
@@ -561,7 +561,6 @@ def _parse_tool_call(text):
             name = _TOOL_ALIASES[name]
         args_raw = m.group(2)
         args = _parse_args(args_raw)
-        # Only accept if the name is a known tool and we have at least one arg
         if name in _TOOLS and len(args) >= 1:
             return (name, args)
 
@@ -569,9 +568,8 @@ def _parse_tool_call(text):
 
 
 def _parse_args(raw):
-    """Parse key=value pairs from a string. Values can be quoted or unquoted."""
+    """Parse key=value pairs from a string."""
     args = {}
-    # Match key="value" or key='value' or key=value
     for m in re.finditer(r"(\w+)=\"(.*?)\"|(\w+)='(.*?)'|(\w+)=(\S+?)(?:\s|$)", raw + " "):
         key = m.group(1) or m.group(3) or m.group(5)
         val = m.group(2) or m.group(4) or m.group(6)
@@ -594,13 +592,11 @@ def _detect_finish_or_question(text):
     """
     t = text.strip()
 
-    # Explicit finish
     if t == "finish" or t == "TOOL finish" or t == "TOOL: finish":
         return "finish"
     if re.match(r"^TOOL\s*:?\s*finish\s*$", t):
         return "finish"
 
-    # Question detection - if the model is asking something
     if t.endswith("?"):
         return "question"
 
@@ -612,15 +608,7 @@ def _detect_finish_or_question(text):
 # ---------------------------------------------------------------------------
 
 def _format_conversation(messages):
-    """Format conversation for saving."""
     return [{"role": m.get("role", "user"), "content": m.get("content", "")} for m in messages]
-
-
-def _print_header(text):
-    """Print a header line."""
-    print(f"\n{'=' * 60}")
-    print(f"  {text}")
-    print(f"{'=' * 60}")
 
 
 # ---------------------------------------------------------------------------
@@ -633,7 +621,6 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=T
     _setup_readline()
     _ensure_userdata_dir()
 
-    # Load config
     cfg = _load_config()
     if "show_sysinfo" in cfg and not isinstance(cfg["show_sysinfo"], bool):
         cfg["show_sysinfo"] = str(cfg["show_sysinfo"]).lower() == "true"
@@ -641,15 +628,12 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=T
     auto_continue = cfg.get("auto_continue", auto_continue)
     model_timeout = cfg.get("model_timeout", model_timeout)
 
-    # Create workspace
     workspace = os.path.join(_USERDATA, "project-x")
     os.makedirs(workspace, exist_ok=True)
     os.chdir(workspace)
 
-    # Load AGENT.md once at startup
     agent_md = _load_agent_md()
 
-    # Build system prompt
     from . import prompts
     sysinfo_text = _get_sysinfo() if show_sysinfo else ""
     system_prompt = prompts.SYSTEM_PROMPT
@@ -662,11 +646,9 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=T
     history = []
     last_prompt = ""
 
-    # Task queue and schedule
     task_queue = TaskQueue(_QUEUE_PATH)
     task_schedule = TaskSchedule(_SCHEDULE_PATH)
 
-    # Banner
     print(f"\n  \U0001f916 Mite v0.1.0  \u2014  Model: {model}")
     print(f"  \U0001f4c2 Workspace: {workspace}")
     print(f"  \U0001f504 Auto-continue: {'on' if auto_continue else 'off'}")
@@ -676,14 +658,12 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=T
     print()
 
     while True:
-        # Check scheduled tasks
         due = task_schedule.due_tasks()
         for sched_task in due:
             print(f"  \u23f0 Scheduled task [{sched_task['id']}]: {sched_task['content'][:60]}...")
             _process_user_task(sched_task["content"], system_prompt, messages,
                                model, host, history, auto_continue, model_timeout, task_queue, task_schedule, sched_task_mode=True)
 
-        # Process queue if running
         if task_queue.is_running:
             t = task_queue.next_pending()
             if t:
@@ -704,12 +684,11 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=T
             print()
             break
 
-        raw_input = user_input  # Keep original for /redo
+        raw_input = user_input
 
         if not user_input.strip():
             continue
 
-        # ---- Command handling ----
         if user_input.startswith("/"):
             cmd = user_input[1:].strip().split()
             command = cmd[0].lower() if cmd else ""
@@ -881,14 +860,12 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=T
                 print(f"  Unknown command: {user_input}")
                 continue
 
-        # ---- Normal user input ----
         last_prompt = raw_input
         history.append(("user", user_input))
 
         _process_user_task(user_input, system_prompt, messages,
                            model, host, history, auto_continue, model_timeout, task_queue, task_schedule)
 
-    # Save history on exit
     try:
         import readline
         readline.write_history_file(_HISTFILE)
@@ -905,39 +882,41 @@ def _process_user_task(user_input, system_prompt, messages, model, host, history
                        sched_task_mode=False):
     """Process a single user task through the model loop.
 
+    When sched_task_mode=True, never prints user-facing output or waits for
+    confirmation -- scheduled tasks run silently and abort quietly if stuck.
     Returns False when finish is called (task done, continue main loop).
     """
     messages.append({"role": "user", "content": user_input})
 
     auto_steps = 0
-    max_auto_steps = 20
+    max_auto_steps = 20 if not sched_task_mode else 30
     no_tool_count = 0
     max_no_tool = 3
     force_prompt_sent = False
+    from . import prompts  # import once
 
     while True:
-        # Get model response
         model_reply = _call_ollama(model, messages, host=host, timeout=model_timeout)
         if not model_reply:
-            print("  \u26a0 No response from model")
+            if not sched_task_mode:
+                print("  \u26a0 No response from model")
             break
         if model_reply.startswith("[OLLAMA ERROR]"):
-            print(f"  \u26a0 {model_reply}")
+            if not sched_task_mode:
+                print(f"  \u26a0 {model_reply}")
             break
 
         messages.append({"role": "assistant", "content": model_reply})
         history.append(("mite", model_reply[:60] + ("..." if len(model_reply) > 60 else "")))
 
-        # Check for finish signal
         finish_state = _detect_finish_or_question(model_reply)
         if finish_state == "finish":
             if sched_task_mode:
                 print(f"  \u2705 Scheduled task done\n")
             else:
                 print(f"\n  \u2705 Done!  (use /exit to quit)\n")
-            return False  # Task done, continue main loop
+            return False
 
-        # Check for tool calls
         tool_result = _parse_tool_call(model_reply)
         if tool_result:
             name, args = tool_result
@@ -951,11 +930,9 @@ def _process_user_task(user_input, system_prompt, messages, model, host, history
                     print(f"\n  \u2705 Done!  (use /exit to quit)\n")
                 return False
 
-            # Display tool call
             display = _tool_display(name, args)
             print(f"  {display}")
 
-            # Execute
             if name in _TOOLS:
                 try:
                     result_text = _TOOLS[name](**args)
@@ -964,10 +941,9 @@ def _process_user_task(user_input, system_prompt, messages, model, host, history
             else:
                 result_text = f"[ERROR] Unknown tool: {name}"
 
-            # Print result (briefly)
             if result_text.startswith("[ERROR]"):
                 print(f"    \u274c {result_text}")
-            elif name == "write_file":
+            elif name == "write_file" and not result_text.startswith("[ERROR]"):
                 print(f"    \u2705 Done")
             elif name == "finish" or result_text == "[FINISH]":
                 if sched_task_mode:
@@ -976,39 +952,44 @@ def _process_user_task(user_input, system_prompt, messages, model, host, history
                     print(f"\n  \u2705 Done!  (use /exit to quit)\n")
                 return False
             else:
-                # Show brief result
                 short = result_text[:200]
                 print(f"    {short}")
 
-            # Feed result back to model
             messages.append({"role": "user", "content": f"[Tool result: {name}]\n{result_text[:500]}"})
             auto_steps += 1
 
             if auto_steps >= max_auto_steps:
-                print(f"  \u26a0 Hit max auto-steps ({max_auto_steps}). Stopping.")
+                how = "scheduled task" if sched_task_mode else "auto-steps"
+                print(f"  \u26a0 Hit max {how} ({max_auto_steps}). Stopping.")
                 break
 
-            # Continue loop for next tool call
             continue
 
-        # No tool call in this response
         no_tool_count += 1
 
-        # Check if agent is asking the user a question
+        if sched_task_mode:
+            if finish_state == "question" or no_tool_count < max_no_tool:
+                messages.append({"role": "user", "content": prompts.CONTINUE_PROMPT})
+                continue
+            if not force_prompt_sent:
+                messages.append({"role": "user", "content": prompts.CONTINUE_PROMPT})
+                force_prompt_sent = True
+                continue
+            print(f"  \u26a0 Scheduled task aborted (stuck)\n")
+            break
+
+        # --- Normal (non-scheduled) paths below ---
+
         if finish_state == "question":
             if auto_continue and no_tool_count <= max_no_tool:
-                # Agent is asking — feed a simple continue prompt
-                from . import prompts
                 messages.append({"role": "user", "content": prompts.CONTINUE_PROMPT})
                 continue
             else:
                 print(f"\n  \U0001f916 {model_reply}")
                 break
 
-        # Stuck detection: 3 consecutive non-tool replies
         if no_tool_count >= max_no_tool:
             if not force_prompt_sent:
-                from . import prompts
                 messages.append({"role": "user", "content": prompts.CONTINUE_PROMPT})
                 force_prompt_sent = True
                 continue
@@ -1017,9 +998,7 @@ def _process_user_task(user_input, system_prompt, messages, model, host, history
                 print(f"  \u26a0 Model seems stuck ({no_tool_count} no-tool replies). Returning to prompt.\n")
                 break
 
-        # Auto-continue
         if auto_continue:
-            from . import prompts
             messages.append({"role": "user", "content": prompts.CONTINUE_PROMPT})
             continue
         else:
