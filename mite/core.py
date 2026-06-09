@@ -616,7 +616,7 @@ def _format_conversation(messages):
 # ---------------------------------------------------------------------------
 
 def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=True,
-             auto_continue=True, model_timeout=300):
+             auto_continue=True, model_timeout=300, initial_task=None):
     """Run the interactive mite loop."""
     _setup_readline()
     _ensure_userdata_dir()
@@ -656,6 +656,14 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=T
         print(f"  \U0001f4cb AGENT.md loaded at startup (re-reads on /reset)")
     print(f"  Commands: /exit  /reset  /history  /redo  /agent  /save  /load  /list  /config  /queue  /schedule  /help")
     print()
+
+    # Process initial single-task mode, then fall through to interactive loop
+    if initial_task:
+        print(f"  \U0001f3af Task: {initial_task[:100]}")
+        _process_user_task(initial_task, system_prompt, messages,
+                           model, host, history, auto_continue, model_timeout,
+                           task_queue, task_schedule)
+        print()
 
     while True:
         due = task_schedule.due_tasks()
