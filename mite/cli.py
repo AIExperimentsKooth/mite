@@ -15,7 +15,9 @@ Examples:
   mite "fix the bug in main.py" Run a single task
   mite --model qwen2.5:3b       Use a larger model
   mite --setup                  Run setup only (install Ollama, pull model)
-  mite --update                 Update Mite to the latest version
+  mite --update                 Update Mite to the latest version from GitHub
+  mite --update --dev            Update from the dev branch
+  mite --branch dev              (same, for scripting)
   mite --no-sysinfo             Skip system information report
   mite --host http://192.168.1.5:11434  Connect to remote Ollama
   mite --no-auto-continue      Disable auto-continue (wait after every step)
@@ -30,6 +32,10 @@ Examples:
                         help="Run setup (install Ollama, pull model) then exit")
     parser.add_argument("--update", action="store_true",
                         help="Update Mite to the latest version from GitHub")
+    parser.add_argument("--branch", "-b", default="main",
+                        help="Git branch to update from (default: main). Use --dev for dev branch")
+    parser.add_argument("--dev", action="store_true",
+                        help="Shorthand for --branch dev")
     parser.add_argument("--version", "-v", action="store_true",
                         help="Show version and exit")
     parser.add_argument("--yes", "-y", action="store_true",
@@ -55,7 +61,8 @@ Examples:
         print(f"Python: {sys.version}")
         return
     if args.update:
-        _run_update(args.yes)
+        branch = "dev" if args.dev else args.branch
+        _run_update(args.yes, branch)
         return
     if not args.no_setup:
         _auto_setup(args.model, args.host, args.yes)
@@ -119,7 +126,7 @@ def _auto_setup(model: str, host: str, auto_confirm: bool = False):
         setup.wait_for_ollama()
 
 
-def _run_update(auto_confirm: bool = False):
+def _run_update(auto_confirm: bool = False, branch: str = "main"):
     import subprocess
     import os
     search_paths = [
@@ -138,7 +145,7 @@ def _run_update(auto_confirm: bool = False):
         print("     Or run: bash <(curl -fsSL https://raw.githubusercontent.com/AIExperimentsKooth/mite/main/update.sh)")
         return
     print(f"  Running: {update_script}\n")
-    cmd = ["bash", update_script]
+    cmd = ["bash", update_script, "--branch", branch]
     if auto_confirm:
         cmd.append("--yes")
     try:

@@ -12,6 +12,7 @@
 #   bash update.sh                  # Interactive
 #   bash update.sh --yes            # Non-interactive (auto-confirm)
 #   bash update.sh --dry-run        # Show what would happen without doing it
+#   bash update.sh --branch dev     # Update from the dev branch instead of main
 #   bash update.sh --install-dir /path/to/mite  # Specify install directory
 # ============================================================================
 set -euo pipefail
@@ -51,17 +52,19 @@ RED='\033[0;31m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
-info()  { echo -e "${CYAN}ℹ${NC} $1"; }
-ok()    { echo -e "${GREEN}✓${NC} $1"; }
-warn()  { echo -e "${YELLOW}⚠${NC} $1"; }
-err()   { echo -e "${RED}✗${NC} $1"; }
-header(){ echo; echo -e "${BOLD}$1${NC}"; echo "━━━━━━━━━━━━━━━━━━━━━━━━━"; }
+info()  { echo -e "${CYAN}\u2139${NC} $1"; }
+ok()    { echo -e "${GREEN}\u2713${NC} $1"; }
+warn()  { echo -e "${YELLOW}\u26a0${NC} $1"; }
+err()   { echo -e "${RED}\u2717${NC} $1"; }
+header(){ echo; echo -e "${BOLD}$1${NC}"; echo "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501"; }
 
 # --- Argument parsing ------------------------------------------------------
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --yes|-y)        AUTO_CONFIRM=true; shift ;;
         --dry-run)       DRY_RUN=true; shift ;;
+        --branch)        BRANCH="$2"; shift 2 ;;
+        --branch=*)      BRANCH="${1#*=}"; shift ;;
         --install-dir)   INSTALL_DIR="$2"; shift 2 ;;
         --install-dir=*) INSTALL_DIR="${1#*=}"; shift ;;
         --help|-h)       sed -n '/^# Usage:/,/^# ====/p' "$0" | sed 's/^# //'; exit 0 ;;
@@ -100,14 +103,14 @@ header "Step 1: Backup userdata (~/.mite/)"
 
 if [ -d "$HOME/.mite" ]; then
     if $DRY_RUN; then
-        info "Would backup ~/.mite/ → $BACKUP_DIR"
+        info "Would backup ~/.mite/ \u2192 $BACKUP_DIR"
     else
         info "Backing up ~/.mite/..."
         cp -r "$HOME/.mite" "$BACKUP_DIR"
         ok "Backed up to $BACKUP_DIR"
     fi
 else
-    info "No ~/.mite/ found — nothing to back up."
+    info "No ~/.mite/ found \u2014 nothing to back up."
 fi
 
 # --- Step 2: Confirm --------------------------------------------------------
@@ -115,7 +118,7 @@ header "Step 2: Confirm update"
 
 if ! $AUTO_CONFIRM; then
     if $DRY_RUN; then
-        echo "  (dry run — skipping confirmation)"
+        echo "  (dry run \u2014 skipping confirmation)"
     else
         if $FRESH_INSTALL; then
             echo "  This will install Mite to: ${INSTALL_DIR}"
@@ -159,8 +162,8 @@ fetch_via_clone() {
     local clone_url="$REPO_URL"
 
     if $DRY_RUN; then
-        info "Would clone $REPO_URL → $tmp_dir"
-        info "Would copy $tmp_dir/ → $target/"
+        info "Would clone $REPO_URL \u2192 $tmp_dir"
+        info "Would copy $tmp_dir/ \u2192 $target/"
         return
     fi
 
@@ -231,7 +234,7 @@ if $FRESH_INSTALL; then
     fetch_via_clone "$INSTALL_DIR"
 else
     if ! fetch_via_git "$INSTALL_DIR"; then
-        info "No git remote found at $INSTALL_DIR — cloning fresh..."
+        info "No git remote found at $INSTALL_DIR \u2014 cloning fresh..."
         fetch_via_clone "$INSTALL_DIR"
     fi
 fi
@@ -282,7 +285,7 @@ else
         bash setup.sh
         ok "Setup complete"
     else
-        warn "No setup.sh found at $INSTALL_DIR — skipping."
+        warn "No setup.sh found at $INSTALL_DIR \u2014 skipping."
     fi
 fi
 
@@ -300,13 +303,12 @@ else
         mkdir -p "$TARGET_DIR"
         if [ -f "$INSTALL_DIR/bin/mite" ]; then
             ln -sf "$INSTALL_DIR/bin/mite" "$TARGET_DIR/mite"
-            ok "Linked $INSTALL_DIR/bin/mite → $TARGET_DIR/mite"
+            ok "Linked $INSTALL_DIR/bin/mite \u2192 $TARGET_DIR/mite"
         elif [ -f "$INSTALL_DIR/mite/bin/mite" ]; then
             ln -sf "$INSTALL_DIR/mite/bin/mite" "$TARGET_DIR/mite"
-            ok "Linked $INSTALL_DIR/mite/bin/mite → $TARGET_DIR/mite"
+            ok "Linked $INSTALL_DIR/mite/bin/mite \u2192 $TARGET_DIR/mite"
         fi
 
-        # Suggest PATH addition
         case ":${PATH}:" in
             *:"${TARGET_DIR}":*) ;;
             *) warn "Add to PATH: export PATH=\"\$HOME/.local/bin:\$PATH\"" ;;
