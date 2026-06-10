@@ -117,7 +117,7 @@ On failure, it automatically restores the backup. No data loss.
 | `/load <name>` | Load a saved conversation |
 | `/list` | List saved conversations |
 | `/config` | Show current preferences |
-| `/config <k> <v>` | Set a preference (e.g., `model`, `show_sysinfo`) |
+| `/config <k> <v>` | Set a preference (`show_sysinfo`, `auto_continue`, `model_timeout`, `stuck_threshold`) |
 | `/redo` (`/r`) | Re-run the last prompt |
 | `/help` | Show help |
 
@@ -204,7 +204,7 @@ Mite stores your data in `~/.mite/`:
 
 | Path | Description |
 |------|-------------|
-| `~/.mite/config.json` | Preferences (model, show_sysinfo, auto_continue) — set via `/config` |
+| `~/.mite/config.json` | Preferences (show_sysinfo, auto_continue, model_timeout, stuck_threshold) — set via `/config` |
 | `~/.mite/queue.json` | Task queue — managed via `/queue` |
 | `~/.mite/schedule.json` | Scheduled tasks — managed via `/schedule` |
 | `~/.mite/conversations/` | Saved conversations — use `/save` and `/load` |
