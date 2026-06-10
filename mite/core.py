@@ -298,12 +298,21 @@ def _search_files(pattern, path="."):
         return f"[ERROR] {e}"
 
 
+def _web_search(query, count=5):
+    try:
+        from . import tools
+        return tools.web_search(query=query, count=count)
+    except Exception as e:
+        return f"[ERROR] {e}"
+
+
 _TOOLS = {
     "read_file": _read_file,
     "write_file": _write_file,
     "patch": _patch,
     "shell": _shell,
     "search_files": _search_files,
+    "web_search": _web_search,
     "finish": lambda: "[FINISH]",
 }
 
@@ -318,6 +327,7 @@ _TOOL_DISPLAY = {
     "patch": "\U0001f527",
     "shell": "$",
     "search_files": "\U0001f50d",
+    "web_search": "\U0001f310",
     "finish": "\u2705",
 }
 

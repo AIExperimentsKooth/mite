@@ -10,6 +10,7 @@ TOOLS:
   patch path=FILE old_string=TEXT new_string=TEXT
   shell command=CMD
   search pattern=PAT target=content|files path=DIR
+  web_search query=QUERY count=N
   finish message=TEXT
 
 Aliases: file=path old=old_string new=new_string cmd=command

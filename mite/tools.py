@@ -195,12 +195,136 @@ def finish(message: str = "") -> str:
     return f"DONE: {msg}"
 
 
+def web_search(query: str, count: int = 5) -> str:
+    """Search the web via DuckDuckGo (no API key needed).
+
+    Uses the Instant Answer API for direct answers/definitions, then falls
+    back to the Lite HTML endpoint for general search results.
+    """
+    import urllib.request
+    import urllib.parse
+    import json as json_mod
+    import html as html_mod
+
+    if not query or not query.strip():
+        return "ERROR: Empty query"
+
+    q = query.strip()
+    encoded = urllib.parse.quote(q)
+
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; Mite/1.0)"}
+    lines = []
+
+    # ---- Phase 1: Instant Answer API ----
+    ia_url = f"https://api.duckduckgo.com/?q={encoded}&format=json&no_html=1&skip_disambig=1"
+    try:
+        req = urllib.request.Request(ia_url, headers=headers)
+        resp = urllib.request.urlopen(req, timeout=15)
+        data = json_mod.loads(resp.read().decode())
+    except Exception:
+        data = {}
+
+    abstract = (data.get("AbstractText") or "").strip()
+    source = (data.get("AbstractSource") or "").strip()
+    if abstract:
+        lines.append(f"Abstract: {abstract}")
+        if source:
+            lines.append(f"Source: {source}")
+        url_field = (data.get("AbstractURL") or "").strip()
+        if url_field:
+            lines.append(f"URL: {url_field}")
+        lines.append("")
+
+    answer = (data.get("Answer") or "").strip()
+    if answer and answer != abstract:
+        lines.append(f"Answer: {answer}")
+        ans_url = (data.get("AnswerURL") or "").strip()
+        if ans_url:
+            lines.append(f"URL: {ans_url}")
+        lines.append("")
+
+    # ---- Phase 2: Lite HTML endpoint (general web results) ----
+    lite_url = f"https://lite.duckduckgo.com/lite/?q={encoded}"
+    try:
+        req = urllib.request.Request(lite_url, headers=headers)
+        resp = urllib.request.urlopen(req, timeout=15)
+        html_content = resp.read().decode("utf-8", errors="replace")
+    except Exception:
+        html_content = ""
+
+    if html_content:
+        # Parse the simple lite HTML — it's very structured:
+        # <a rel="nofollow" href="URL" class="result-link">TITLE</a>
+        # <p class="result-snippet">SNIPPET</p>
+        seen_urls = set()
+        result_count = 0
+        idx = 0
+        while True:
+            # Find next result link
+            link_start = html_content.find('<a rel="nofollow" href="', idx)
+            if link_start == -1:
+                break
+            link_start += len('<a rel="nofollow" href="')
+            link_end = html_content.find('"', link_start)
+            if link_end == -1:
+                break
+            url = html_content[link_start:link_end]
+            # Unescape HTML entities
+            url = html_mod.unescape(url)
+
+            # Find title (after the href, before </a>)
+            title_start = html_content.find('>', link_end) + 1
+            title_end = html_content.find('</a>', title_start)
+            if title_end == -1:
+                idx = link_end + 1
+                continue
+            title = html_content[title_start:title_end].strip()
+            title = html_mod.unescape(title)
+
+            # Find snippet
+            snippet = ""
+            snippet_marker = '<p class="result-snippet">'
+            snippet_start = html_content.find(snippet_marker, title_end)
+            if snippet_start != -1:
+                snippet_start += len(snippet_marker)
+                snippet_end = html_content.find('</p>', snippet_start)
+                if snippet_end != -1:
+                    snippet_html = html_content[snippet_start:snippet_end]
+                    # Remove <b> tags
+                    snippet_html = snippet_html.replace('<b>', '').replace('</b>', '')
+                    snippet = html_mod.unescape(snippet_html).strip()
+
+            idx = title_end + 1
+
+            # Deduplicate by URL
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                entry = f"- {title}"
+                if url:
+                    entry += f"\n  {url}"
+                if snippet:
+                    entry += f"\n  {snippet}"
+                lines.append(entry)
+                result_count += 1
+                if result_count >= count:
+                    break
+
+    if not lines:
+        return "No results found."
+
+    result = "\n".join(lines)
+    if len(result) > 4000:
+        result = result[:4000] + "\n... (truncated)"
+    return result
+
+
 TOOLS = {
     "read_file":  {"fn": read_file,  "desc": "Read a file", "args": {"path": "File path", "offset": "Line offset (default 1)", "limit": "Max lines (default 500)"}},
     "write_file": {"fn": write_file, "desc": "Write/create a file", "args": {"path": "File path", "content": "File content"}},
     "patch":      {"fn": patch,      "desc": "Edit a file (find and replace)", "args": {"path": "File path", "old_string": "Text to find", "new_string": "Replacement text", "replace_all": "Replace all (true/false)"}},
     "shell":      {"fn": shell,      "desc": "Run a shell command", "args": {"command": "Command to run", "timeout": "Timeout in seconds (default 60)"}},
     "search":     {"fn": search,     "desc": "Search files or find files by name", "args": {"pattern": "Search pattern", "target": "content or files", "path": "Directory path", "file_glob": "File glob filter", "limit": "Max results"}},
+    "web_search":  {"fn": web_search, "desc": "Search the web (DuckDuckGo)", "args": {"query": "Search query", "count": "Max results (default 5)"}},
     "finish":     {"fn": finish,     "desc": "Mark task complete", "args": {"message": "Optional completion message"}},
 }
 
