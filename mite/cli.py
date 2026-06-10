@@ -22,13 +22,15 @@ Examples:
   mite --host http://192.168.1.5:11434  Connect to remote Ollama
   mite --no-auto-continue      Disable auto-continue (wait after every step)
   mite --stuck-threshold 15   No-tool replies before stuck detection (default: 10)
+  mite --backend llamacpp     Use llama.cpp backend instead of Ollama (default: ollama)
+  mite --setup --backend llamacpp  Setup llama.cpp backend on i686/ARM
         """
     )
     parser.add_argument("task", nargs="?", help="Task to execute (omit for interactive mode)")
     parser.add_argument("--model", "-m", default=os.environ.get("MITE_MODEL", "qwen2.5:0.5b"),
                         help="Ollama model to use (default: qwen2.5:0.5b, env: MITE_MODEL)")
     parser.add_argument("--host", default=os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
-                        help="Ollama API host (default: http://localhost:11434, env: OLLAMA_HOST)")
+                        help="API host (default: http://localhost:11434, env: OLLAMA_HOST). For llamacpp: http://localhost:8080")
     parser.add_argument("--setup", action="store_true",
                         help="Run setup (install Ollama, pull model) then exit")
     parser.add_argument("--update", action="store_true",
@@ -51,6 +53,8 @@ Examples:
                         help="Disable auto-continue (wait for input after every step; also: --auto-continue)")
     parser.add_argument("--stuck-threshold", type=int, default=None,
                         help="No-tool replies before stuck detection (default: 10)")
+    parser.add_argument("--backend", default=None, choices=["ollama", "llamacpp"],
+                        help="LLM backend to use (ollama or llamacpp, default: ollama)")
     args = parser.parse_args()
     if args.version:
         print(f"Mite v{__version__}")
@@ -68,7 +72,7 @@ Examples:
         _run_update(args.yes, branch)
         return
     if not args.no_setup:
-        _auto_setup(args.model, args.host, args.yes)
+        _auto_setup(args.model, args.host, args.yes, backend=args.backend)
     if args.setup:
         return
     try:
@@ -78,7 +82,8 @@ Examples:
             initial_task=args.task,
             show_sysinfo=None if args.no_sysinfo is None else (not args.no_sysinfo),
             auto_continue=None if args.no_auto_continue is None else (not args.no_auto_continue),
-            stuck_threshold=args.stuck_threshold
+            stuck_threshold=args.stuck_threshold,
+            backend=args.backend
         )
     except KeyboardInterrupt:
         print("\n  Interrupted.")
@@ -90,9 +95,25 @@ Examples:
         sys.exit(1)
 
 
-def _auto_setup(model: str, host: str, auto_confirm: bool = False):
+def _auto_setup(model: str, host: str, auto_confirm: bool = False, backend: str = "auto"):
     import subprocess
     import shutil
+    from . import setup
+
+    if backend == "auto":
+        backend = setup.suggest_backend()
+
+    if backend == "llamacpp":
+        print(f"  \u2699 Setting up llama.cpp backend for {setup.detect_arch()}...")
+        if not auto_confirm:
+            response = input("  Build llama.cpp from source + download model? [Y/n]: ").strip().lower()
+            if response in ("n", "no"):
+                print("  Setup skipped. Run: python -m mite --setup")
+                return
+        setup.run(model, backend="llamacpp")
+        return
+
+    # Ollama path
     ollama_ok = shutil.which("ollama") is not None
     model_pulled = False
     if ollama_ok:
@@ -113,7 +134,7 @@ def _auto_setup(model: str, host: str, auto_confirm: bool = False):
                 print("  Setup skipped. You'll need to install Ollama manually.")
                 print("  See: https://ollama.com/download")
                 return
-        setup.run(model)
+        setup.run(model, backend="ollama")
     elif not model_pulled:
         print(f"  \u26a0 Model '{model}' not found locally.")
         if not auto_confirm:
@@ -124,7 +145,7 @@ def _auto_setup(model: str, host: str, auto_confirm: bool = False):
         setup.start_ollama()
         setup.wait_for_ollama()
         setup.pull_model(model)
-        setup.test_model(model)
+        setup.test_ollama(model)
     else:
         setup.start_ollama()
         setup.wait_for_ollama()

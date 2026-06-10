@@ -48,7 +48,7 @@ Commands:
   /load <name>  Load conversation
   /list       List saved conversations
   /config     Show config
-  /config <key> <value>  Set config (show_sysinfo, auto_continue, model_timeout, stuck_threshold)
+  /config <key> <value>  Set config (show_sysinfo, auto_continue, model_timeout, stuck_threshold, backend=ollama|llamacpp)
   /queue      Manage task queue (add <task> | list | remove <id> | clear | start | stop)
   /schedule   Manage scheduled tasks (add <interval> <task> | list | remove <id> | clear | pause | resume)
   /help       Show this help
@@ -82,6 +82,7 @@ DEFAULT_CONFIG = {
     "auto_continue": True,
     "model_timeout": 300,
     "stuck_threshold": 10,
+    "backend": "ollama",
 }
 
 
@@ -498,38 +499,55 @@ def format_interval(seconds):
 
 
 # ---------------------------------------------------------------------------
-# Ollama interaction
+# Backend interaction (Ollama / llama.cpp)
 # ---------------------------------------------------------------------------
 
-def _call_ollama(model, messages, host="http://localhost:11434", timeout=300):
-    """Call Ollama chat API with the given messages."""
+def _call_llm(model, messages, host="http://localhost:11434", timeout=300, backend="ollama"):
+    """Call the LLM backend with the given messages.
+
+    Supports:
+      - ollama:  http://localhost:11434/api/chat
+      - llamacpp: http://localhost:8080/v1/chat/completions (OpenAI-compatible)
+    """
     import urllib.request
     import urllib.error
 
-    url = f"{host}/api/chat"
-    data = json.dumps({
-        "model": model,
-        "messages": messages,
-        "stream": False,
-        "options": {
-            "num_predict": -2,
+    if backend == "llamacpp":
+        url = f"{host}/v1/chat/completions"
+        data = json.dumps({
+            "model": model,
+            "messages": messages,
+            "stream": False,
             "temperature": 0.2,
             "top_p": 0.9,
-        }
-    }).encode()
+        }).encode()
+    else:
+        url = f"{host}/api/chat"
+        data = json.dumps({
+            "model": model,
+            "messages": messages,
+            "stream": False,
+            "options": {
+                "num_predict": -2,
+                "temperature": 0.2,
+                "top_p": 0.9,
+            }
+        }).encode()
 
     req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
     try:
         resp = urllib.request.urlopen(req, timeout=timeout)
         result = json.loads(resp.read())
+        if backend == "llamacpp":
+            return result.get("choices", [{}])[0].get("message", {}).get("content", "")
         return result.get("message", {}).get("content", "")
     except urllib.error.HTTPError as e:
         body = e.read().decode()
-        return f"[OLLAMA ERROR] HTTP {e.code}: {body}"
+        return f"[LLM ERROR] HTTP {e.code}: {body}"
     except urllib.error.URLError as e:
-        return f"[OLLAMA ERROR] {e.reason} - Is Ollama running?"
+        return f"[LLM ERROR] {e.reason} - Is the server running?"
     except Exception as e:
-        return f"[OLLAMA ERROR] {e}"
+        return f"[LLM ERROR] {e}"
 
 
 # ---------------------------------------------------------------------------
@@ -795,7 +813,7 @@ def _format_conversation(messages):
 # ---------------------------------------------------------------------------
 
 def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=None,
-             auto_continue=None, model_timeout=None, stuck_threshold=None, initial_task=None):
+             auto_continue=None, model_timeout=None, stuck_threshold=None, backend=None, initial_task=None):
     """Run the interactive mite loop.
 
     Config values are loaded from ~/.mite/config.json first, then explicit
@@ -813,6 +831,7 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=N
     auto_continue = cfgl.get("auto_continue", True) if auto_continue is None else auto_continue
     model_timeout = int(cfgl.get("model_timeout", 300)) if model_timeout is None else model_timeout
     stuck_threshold = int(cfgl.get("stuck_threshold", 10)) if stuck_threshold is None else stuck_threshold
+    backend = cfgl.get("backend", "ollama") if backend is None else backend
 
     workspace = os.path.join(_USERDATA, "project-x")
     os.makedirs(workspace, exist_ok=True)
@@ -849,6 +868,7 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=N
     print(f"\n  \U0001f916 Mite v0.1.0  \u2014  Model: {model}")
     print(f"  \U0001f4c2 Workspace: {workspace}")
     print(f"  \U0001f504 Auto-continue: {'on' if auto_continue else 'off'}  (stuck threshold: {stuck_threshold})")
+    print(f"  \U0001f5a5  Backend: {backend}")
     if agent_md:
         print(f"  \U0001f4cb AGENT.md loaded at startup (re-reads on /reset)")
     print(f"  Commands: /exit  /reset  /history  /redo  /agent  /save  /load  /list  /config  /queue  /schedule  /help")
@@ -859,7 +879,7 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=N
         print(f"  \U0001f3af Task: {initial_task[:100]}")
         _process_user_task(initial_task, system_prompt, messages,
                            model, host, history, auto_continue, model_timeout,
-                           stuck_threshold, task_queue, task_schedule)
+                           stuck_threshold, backend, task_queue, task_schedule)
         _auto_save_conversation(messages)
         print()
 
@@ -869,7 +889,7 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=N
             print(f"  \u23f0 Scheduled task [{sched_task['id']}]: {sched_task['content'][:60]}...")
             _process_user_task(sched_task["content"], system_prompt, messages,
                                model, host, history, auto_continue, model_timeout,
-                               stuck_threshold, task_queue, task_schedule, sched_task_mode=True)
+                               stuck_threshold, backend, task_queue, task_schedule, sched_task_mode=True)
             _auto_save_conversation(messages)
 
         if task_queue.is_running:
@@ -880,7 +900,7 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=N
                 task_queue.save()
                 _process_user_task(t["content"], system_prompt, messages,
                                    model, host, history, auto_continue, model_timeout,
-                                   stuck_threshold, task_queue, task_schedule)
+                                   stuck_threshold, backend, task_queue, task_schedule)
                 _auto_save_conversation(messages)
                 t["status"] = "completed"
                 task_queue.save()
@@ -982,6 +1002,7 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=N
                     print(f"  auto_continue: {auto_continue}")
                     print(f"  model_timeout: {model_timeout}")
                     print(f"  stuck_threshold: {stuck_threshold}")
+                    print(f"  backend: {backend}")
                 elif len(cmd) >= 3:
                     key = cmd[1]
                     value = cmd[2]
@@ -1011,6 +1032,14 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=N
                             print(f"  stuck_threshold = {stuck_threshold}")
                         except ValueError:
                             print("  Invalid threshold value")
+                    elif key == "backend":
+                        if value in ("ollama", "llamacpp"):
+                            backend = value
+                            cfg["backend"] = backend
+                            _save_config(cfg)
+                            print(f"  backend = {backend}")
+                        else:
+                            print("  Valid backends: ollama, llamacpp")
                     else:
                         print(f"  Unknown config key: {key}")
                 else:
@@ -1086,7 +1115,7 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=N
 
         _process_user_task(user_input, system_prompt, messages,
                            model, host, history, auto_continue, model_timeout,
-                           stuck_threshold, task_queue, task_schedule)
+                           stuck_threshold, backend, task_queue, task_schedule)
 
         _auto_save_conversation(messages)
 
@@ -1102,7 +1131,7 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=N
 # ---------------------------------------------------------------------------
 
 def _process_user_task(user_input, system_prompt, messages, model, host, history,
-                       auto_continue, model_timeout, stuck_threshold, task_queue, task_schedule,
+                       auto_continue, model_timeout, stuck_threshold, backend, task_queue, task_schedule,
                        sched_task_mode=False):
     """Process a single user task through the model loop.
 
@@ -1120,7 +1149,7 @@ def _process_user_task(user_input, system_prompt, messages, model, host, history
     from . import prompts  # import once
 
     while True:
-        model_reply = _call_ollama(model, messages, host=host, timeout=model_timeout)
+        model_reply = _call_llm(model, messages, host=host, timeout=model_timeout, backend=backend)
         if not model_reply:
             if not sched_task_mode:
                 print("  \u26a0 No response from model")
