@@ -14,7 +14,13 @@ TOOLS:
 
 Aliases: file=path old=old_string new=new_string cmd=command
 
-FORMAT: TOOL toolname arg=val
+SINGLE-LINE format: TOOL name(arg=val)
+MULTI-LINE format (for write_file/patch with code):
+  [TOOL write_file]
+  path: hello.py
+  content:
+    print("hello")
+  [/TOOL]
 
 NEVER describe. Only use TOOL. Finish when done."""
 

@@ -506,7 +506,31 @@ _TOOL_ALIASES = {
 def _parse_tool_call(text):
     """Parse model output into (tool_name, args_dict) or None.
 
-    Accepts formats:
+    Accepts formats (tried in order):
+
+    BLOCK FORMAT (multi-line, best for write_file/patch with large content):
+      [TOOL write_file]
+      path: hello.py
+      content:
+        #!/usr/bin/env python
+        print("hello")
+      [/TOOL]
+
+      [TOOL patch]
+      path: main.py
+      old_string:
+        def old():
+          pass
+      new_string:
+        def new():
+          return 42
+      [/TOOL]
+
+      [TOOL shell]
+      command: ls -la
+      [/TOOL]
+
+    SINGLE-LINE FORMATS (backward compat, unchanged):
       TOOL read_file(path="foo.txt")
       TOOL: write_file(path="bar", content="hi")
       read_file(path="foo.txt")
@@ -521,54 +545,164 @@ def _parse_tool_call(text):
     if text == "finish" or text == "DONE":
         return ("finish", {})
 
-    # Strategy 1: TOOL name(args) or TOOL: name(args)
+    # Strategy 1 (NEW): multi-line block format [TOOL name] ... [/TOOL]
+    result = _parse_block_format(text)
+    if result:
+        return result
+
+    # Strategy 2: TOOL name(args) or TOOL: name(args)
     m = re.match(r"^TOOL\s*:?\s*(\w+)\((.+)\)", text)
     if m:
         name = m.group(1).lower()
         if name in _TOOL_ALIASES:
             name = _TOOL_ALIASES[name]
         args_raw = m.group(2)
-        args = _parse_args(args_raw)
+        args = _parse_args_singleline(args_raw)
         return (name, args)
 
-    # Strategy 2: just name(args) -- no TOOL prefix
+    # Strategy 3: just name(args) -- no TOOL prefix
     m = re.match(r"^(\w+)\((.+)\)", text)
     if m:
         name = m.group(1).lower()
         if name in _TOOL_ALIASES:
             name = _TOOL_ALIASES[name]
         args_raw = m.group(2)
-        args = _parse_args(args_raw)
+        args = _parse_args_singleline(args_raw)
         if name in _TOOLS:
             return (name, args)
 
-    # Strategy 3: TOOL name key=val key=val (no parens)
+    # Strategy 4: TOOL name key=val key=val (no parens)
     m = re.match(r"^TOOL\s*:?\s*(\w+)\s+(.+)", text)
     if m:
         name = m.group(1).lower()
         if name in _TOOL_ALIASES:
             name = _TOOL_ALIASES[name]
         args_raw = m.group(2)
-        args = _parse_args(args_raw)
+        args = _parse_args_singleline(args_raw)
         if name in _TOOLS:
             return (name, args)
 
-    # Strategy 4: bare name key=val (no TOOL, no parens) -- lenient
+    # Strategy 5: bare name key=val (no TOOL, no parens) -- lenient
     m = re.match(r"^(\w+)\s+(.+)", text)
     if m:
         name = m.group(1).lower()
         if name in _TOOL_ALIASES:
             name = _TOOL_ALIASES[name]
         args_raw = m.group(2)
-        args = _parse_args(args_raw)
+        args = _parse_args_singleline(args_raw)
         if name in _TOOLS and len(args) >= 1:
             return (name, args)
 
     return None
 
 
-def _parse_args(raw):
-    """Parse key=value pairs from a string."""
+def _parse_block_format(text):
+    """Try to parse as [TOOL name] ... [/TOOL] multi-line block.
+
+    Returns (tool_name, args_dict) or None.
+    """
+    # Match [TOOL name] or [TOOL: name] at start, with [/TOOL] closing
+    # Also accept [name] ... [/name] for aliases like [write_file]
+    m = re.search(
+        r"\[TOOL\s*:?\s*(\w+)\](.*?)\[/TOOL\]",
+        text, re.DOTALL
+    )
+    if not m:
+        # Also try bare [name] ... [/name] (without TOOL prefix)
+        m = re.search(
+            r"\[(\w+)\](.*?)\[/\1\]",
+            text, re.DOTALL
+        )
+    if not m:
+        return None
+
+    name = m.group(1).lower()
+    if name in _TOOL_ALIASES:
+        name = _TOOL_ALIASES[name]
+    if name not in _TOOLS:
+        return None
+
+    body = m.group(2).strip()
+    args = _parse_block_args(body)
+    return (name, args)
+
+
+def _parse_block_args(body):
+    """Parse key: value pairs from a block body.
+
+    Handles:
+      key: simple_value
+      key:
+        multi-line
+        indented content
+      key:
+        until next key: or end
+
+    Returns dict.
+    """
+    args = {}
+    lines = body.split("\n")
+    current_key = None
+    current_value_lines = []
+
+    def _flush():
+        """Save current multi-line value if any."""
+        nonlocal current_key, current_value_lines
+        if current_key is not None and current_value_lines:
+            # Detect common indent and strip it
+            val = _dedent(current_value_lines)
+            args[current_key] = val.strip()
+            current_key = None
+            current_value_lines = []
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+
+        # Check if this line starts a new key: value pair
+        kv_match = re.match(r"^(\w[\w_]*)\s*:\s*(.*)", line)
+        if kv_match:
+            _flush()
+            key = kv_match.group(1)
+            val = kv_match.group(2).strip()
+            if val:
+                # Inline value on same line
+                args[key] = val
+            else:
+                # Multi-line value starts on next lines
+                current_key = key
+                current_value_lines = []
+            i += 1
+            continue
+
+        # If we're collecting a multi-line value, add this line
+        if current_key is not None:
+            current_value_lines.append(line)
+        i += 1
+
+    # Flush any remaining multi-line value
+    _flush()
+
+    return args
+
+
+def _dedent(lines):
+    """Remove common leading whitespace from a list of lines."""
+    if not lines:
+        return ""
+    # Find minimum indent among non-empty lines
+    indents = []
+    for line in lines:
+        if line.strip():  # non-empty
+            stripped = line.lstrip()
+            indent = len(line) - len(stripped)
+            indents.append(indent)
+    common = min(indents) if indents else 0
+    return "\n".join(line[common:] if common > 0 else line for line in lines)
+
+
+def _parse_args_singleline(raw):
+    """Parse key=value pairs from a single-line string."""
     args = {}
     for m in re.finditer(r"(\w+)=\"(.*?)\"|(\w+)='(.*?)'|(\w+)=(\S+?)(?:\s|$)", raw + " "):
         key = m.group(1) or m.group(3) or m.group(5)
