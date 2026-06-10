@@ -48,7 +48,7 @@ Commands:
   /load <name>  Load conversation
   /list       List saved conversations
   /config     Show config
-  /config <key> <value>  Set config (show_sysinfo, auto_continue, model_timeout)
+  /config <key> <value>  Set config (show_sysinfo, auto_continue, model_timeout, stuck_threshold)
   /queue      Manage task queue (add <task> | list | remove <id> | clear | start | stop)
   /schedule   Manage scheduled tasks (add <interval> <task> | list | remove <id> | clear | pause | resume)
   /help       Show this help
@@ -80,6 +80,7 @@ DEFAULT_CONFIG = {
     "show_sysinfo": True,
     "auto_continue": True,
     "model_timeout": 300,
+    "stuck_threshold": 10,
 }
 
 
@@ -750,7 +751,7 @@ def _format_conversation(messages):
 # ---------------------------------------------------------------------------
 
 def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=True,
-             auto_continue=True, model_timeout=300, initial_task=None):
+             auto_continue=True, model_timeout=300, stuck_threshold=10, initial_task=None):
     """Run the interactive mite loop."""
     _setup_readline()
     _ensure_userdata_dir()
@@ -761,6 +762,7 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=T
     show_sysinfo = cfg.get("show_sysinfo", show_sysinfo)
     auto_continue = cfg.get("auto_continue", auto_continue)
     model_timeout = cfg.get("model_timeout", model_timeout)
+    stuck_threshold = cfg.get("stuck_threshold", stuck_threshold)
 
     workspace = os.path.join(_USERDATA, "project-x")
     os.makedirs(workspace, exist_ok=True)
@@ -785,7 +787,7 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=T
 
     print(f"\n  \U0001f916 Mite v0.1.0  \u2014  Model: {model}")
     print(f"  \U0001f4c2 Workspace: {workspace}")
-    print(f"  \U0001f504 Auto-continue: {'on' if auto_continue else 'off'}")
+    print(f"  \U0001f504 Auto-continue: {'on' if auto_continue else 'off'}  (stuck threshold: {stuck_threshold})")
     if agent_md:
         print(f"  \U0001f4cb AGENT.md loaded at startup (re-reads on /reset)")
     print(f"  Commands: /exit  /reset  /history  /redo  /agent  /save  /load  /list  /config  /queue  /schedule  /help")
@@ -796,7 +798,7 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=T
         print(f"  \U0001f3af Task: {initial_task[:100]}")
         _process_user_task(initial_task, system_prompt, messages,
                            model, host, history, auto_continue, model_timeout,
-                           task_queue, task_schedule)
+                           stuck_threshold, task_queue, task_schedule)
         print()
 
     while True:
@@ -804,7 +806,8 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=T
         for sched_task in due:
             print(f"  \u23f0 Scheduled task [{sched_task['id']}]: {sched_task['content'][:60]}...")
             _process_user_task(sched_task["content"], system_prompt, messages,
-                               model, host, history, auto_continue, model_timeout, task_queue, task_schedule, sched_task_mode=True)
+                               model, host, history, auto_continue, model_timeout,
+                               stuck_threshold, task_queue, task_schedule, sched_task_mode=True)
 
         if task_queue.is_running:
             t = task_queue.next_pending()
@@ -813,7 +816,8 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=T
                 t["status"] = "in_progress"
                 task_queue.save()
                 _process_user_task(t["content"], system_prompt, messages,
-                                   model, host, history, auto_continue, model_timeout, task_queue, task_schedule)
+                                   model, host, history, auto_continue, model_timeout,
+                                   stuck_threshold, task_queue, task_schedule)
                 t["status"] = "completed"
                 task_queue.save()
             else:
@@ -911,6 +915,7 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=T
                     print(f"  show_sysinfo: {show_sysinfo}")
                     print(f"  auto_continue: {auto_continue}")
                     print(f"  model_timeout: {model_timeout}")
+                    print(f"  stuck_threshold: {stuck_threshold}")
                 elif len(cmd) >= 3:
                     key = cmd[1]
                     value = cmd[2]
@@ -932,6 +937,14 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=T
                             print(f"  model_timeout = {model_timeout}s")
                         except ValueError:
                             print("  Invalid timeout value")
+                    elif key == "stuck_threshold":
+                        try:
+                            stuck_threshold = int(value)
+                            cfg["stuck_threshold"] = stuck_threshold
+                            _save_config(cfg)
+                            print(f"  stuck_threshold = {stuck_threshold}")
+                        except ValueError:
+                            print("  Invalid threshold value")
                     else:
                         print(f"  Unknown config key: {key}")
                 else:
@@ -1006,7 +1019,8 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=T
         history.append(("user", user_input))
 
         _process_user_task(user_input, system_prompt, messages,
-                           model, host, history, auto_continue, model_timeout, task_queue, task_schedule)
+                           model, host, history, auto_continue, model_timeout,
+                           stuck_threshold, task_queue, task_schedule)
 
     try:
         import readline
@@ -1020,7 +1034,7 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=T
 # ---------------------------------------------------------------------------
 
 def _process_user_task(user_input, system_prompt, messages, model, host, history,
-                       auto_continue, model_timeout, task_queue, task_schedule,
+                       auto_continue, model_timeout, stuck_threshold, task_queue, task_schedule,
                        sched_task_mode=False):
     """Process a single user task through the model loop.
 
@@ -1033,7 +1047,7 @@ def _process_user_task(user_input, system_prompt, messages, model, host, history
     auto_steps = 0
     max_auto_steps = 20 if not sched_task_mode else 30
     no_tool_count = 0
-    max_no_tool = 3
+    max_no_tool = stuck_threshold
     force_prompt_sent = False
     from . import prompts  # import once
 
