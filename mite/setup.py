@@ -287,13 +287,30 @@ def install_llamacpp():
 
     # Build only the server (faster than everything)
     cpu_count = os.cpu_count() or 1
-    result = subprocess.run(
-        ["cmake", "--build", build_dir, "--target", "llama-server",
-         "-j", str(cpu_count)],
-        capture_output=True, text=True, timeout=600
+    print(f"  \u23f3 Building llama.cpp server (-j {cpu_count})...")
+    print(f"    (this can take 10-60+ minutes on slower devices)")
+    build_cmd = ["cmake", "--build", build_dir, "--target", "llama-server",
+                  "-j", str(cpu_count)]
+    build_proc = subprocess.Popen(
+        build_cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,  # line-buffered
     )
-    if result.returncode != 0:
-        print(f"  \u26a0 Build failed: {result.stderr[:300]}")
+    last_line = ""
+    if build_proc.stdout:
+        for line in build_proc.stdout:
+            line = line.rstrip()
+            if line:
+                last_line = line
+                # Print a compact progress indicator (last 80 chars of each relevant line)
+                short = line.strip()[-80:] if len(line.strip()) > 80 else line.strip()
+                print(f"    {short}")
+    build_proc.wait()
+    if build_proc.returncode != 0:
+        print(f"  \u26a0 Build failed (exit code {build_proc.returncode})")
+        print(f"  Last output: {last_line[:200]}")
         return False
 
     if check_llamacpp():
