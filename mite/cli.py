@@ -46,7 +46,7 @@ Examples:
     parser.add_argument("--no-setup", action="store_true",
                         help="Skip auto-setup check and run directly")
     parser.add_argument("--debug", action="store_true",
-                        help="Show debug information")
+                        help="Enable debug mode (show full model output, raw tool calls, thinking)")
     parser.add_argument("--no-sysinfo", action=argparse.BooleanOptionalAction, default=None,
                         help="Skip system information report at startup (also: --sysinfo)")
     parser.add_argument("--no-auto-continue", action=argparse.BooleanOptionalAction, default=None,
@@ -61,12 +61,10 @@ Examples:
         print(f"Model: {args.model}")
         return
     if args.debug:
-        print(f"Mite v{__version__}")
+        print(f"Mite v{__version__} — debug mode enabled")
         print(f"Model: {args.model}")
         print(f"Host: {args.host}")
-        print(f"Task: {args.task}")
-        print(f"Python: {sys.version}")
-        return
+        print(f"Backend: {args.backend}")
     if args.update:
         branch = "dev" if args.dev else args.branch
         _run_update(args.yes, branch)
@@ -83,7 +81,8 @@ Examples:
             show_sysinfo=None if args.no_sysinfo is None else (not args.no_sysinfo),
             auto_continue=None if args.no_auto_continue is None else (not args.no_auto_continue),
             stuck_threshold=args.stuck_threshold,
-            backend=args.backend
+            backend=args.backend,
+            debug=True if args.debug else None
         )
     except KeyboardInterrupt:
         print("\n  Interrupted.")
