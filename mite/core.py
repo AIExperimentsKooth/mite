@@ -75,6 +75,7 @@ _CONV_DIR = os.path.join(_USERDATA, "conversations")
 _CONFIG_PATH = os.path.join(_USERDATA, "config.json")
 _QUEUE_PATH = os.path.join(_USERDATA, "queue.json")
 _SCHEDULE_PATH = os.path.join(_USERDATA, "schedule.json")
+_LAST_CONV_PATH = os.path.join(_CONV_DIR, "last.json")
 
 DEFAULT_CONFIG = {
     "show_sysinfo": True,
@@ -124,6 +125,26 @@ def _list_conversations():
     if not os.path.isdir(_CONV_DIR):
         return []
     return sorted(f.replace(".json", "") for f in os.listdir(_CONV_DIR) if f.endswith(".json"))
+
+
+def _auto_save_conversation(messages):
+    """Auto-save formatted conversation to last.json for crash recovery."""
+    conv = _format_conversation(messages)
+    try:
+        os.makedirs(_CONV_DIR, exist_ok=True)
+        with open(_LAST_CONV_PATH, "w") as f:
+            json.dump(conv, f)
+    except Exception:
+        pass  # silent — don't interrupt the user for a save failure
+
+
+def _auto_load_conversation():
+    """Load last.json if it exists, return list of messages or None."""
+    try:
+        with open(_LAST_CONV_PATH) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -782,6 +803,17 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=T
     history = []
     last_prompt = ""
 
+    # Auto-load last conversation if available
+    last_conv = _auto_load_conversation()
+    if last_conv:
+        # Strip saved system message (if present) — we just built a fresh one
+        last_conv = [m for m in last_conv if m.get("role") != "system"]
+        if last_conv:
+            messages.extend(last_conv)
+            print(f"  \U0001f4c2 Restored conversation ({len(last_conv)} messages from last session)")
+        else:
+            print("  \U0001f4c2 Found saved conversation but it was only system messages")
+
     task_queue = TaskQueue(_QUEUE_PATH)
     task_schedule = TaskSchedule(_SCHEDULE_PATH)
 
@@ -799,6 +831,7 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=T
         _process_user_task(initial_task, system_prompt, messages,
                            model, host, history, auto_continue, model_timeout,
                            stuck_threshold, task_queue, task_schedule)
+        _auto_save_conversation(messages)
         print()
 
     while True:
@@ -808,6 +841,7 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=T
             _process_user_task(sched_task["content"], system_prompt, messages,
                                model, host, history, auto_continue, model_timeout,
                                stuck_threshold, task_queue, task_schedule, sched_task_mode=True)
+            _auto_save_conversation(messages)
 
         if task_queue.is_running:
             t = task_queue.next_pending()
@@ -818,6 +852,7 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=T
                 _process_user_task(t["content"], system_prompt, messages,
                                    model, host, history, auto_continue, model_timeout,
                                    stuck_threshold, task_queue, task_schedule)
+                _auto_save_conversation(messages)
                 t["status"] = "completed"
                 task_queue.save()
             else:
@@ -1022,6 +1057,8 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=T
                            model, host, history, auto_continue, model_timeout,
                            stuck_threshold, task_queue, task_schedule)
 
+        _auto_save_conversation(messages)
+
     try:
         import readline
         readline.write_history_file(_HISTFILE)
@@ -1064,6 +1101,7 @@ def _process_user_task(user_input, system_prompt, messages, model, host, history
 
         messages.append({"role": "assistant", "content": model_reply})
         history.append(("mite", model_reply[:60] + ("..." if len(model_reply) > 60 else "")))
+        _auto_save_conversation(messages)
 
         finish_state = _detect_finish_or_question(model_reply)
         if finish_state == "finish":
