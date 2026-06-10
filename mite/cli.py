@@ -45,10 +45,10 @@ Examples:
                         help="Skip auto-setup check and run directly")
     parser.add_argument("--debug", action="store_true",
                         help="Show debug information")
-    parser.add_argument("--no-sysinfo", action="store_true",
-                        help="Skip system information report at startup")
-    parser.add_argument("--no-auto-continue", action="store_true",
-                        help="Disable auto-continue (wait for input after every step)")
+    parser.add_argument("--no-sysinfo", action=argparse.BooleanOptionalAction, default=None,
+                        help="Skip system information report at startup (also: --sysinfo)")
+    parser.add_argument("--no-auto-continue", action=argparse.BooleanOptionalAction, default=None,
+                        help="Disable auto-continue (wait for input after every step; also: --auto-continue)")
     parser.add_argument("--stuck-threshold", type=int, default=None,
                         help="No-tool replies before stuck detection (default: 10)")
     args = parser.parse_args()
@@ -76,8 +76,8 @@ Examples:
             model=args.model,
             host=args.host,
             initial_task=args.task,
-            show_sysinfo=not args.no_sysinfo,
-            auto_continue=not args.no_auto_continue,
+            show_sysinfo=None if args.no_sysinfo is None else (not args.no_sysinfo),
+            auto_continue=None if args.no_auto_continue is None else (not args.no_auto_continue),
             stuck_threshold=args.stuck_threshold
         )
     except KeyboardInterrupt:

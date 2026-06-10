@@ -97,11 +97,34 @@ def _save_config(cfg):
 
 
 def _load_config():
+    """Load config, migrating old format (missing keys, wrong types) to current defaults."""
+    migrated = False
     try:
         with open(_CONFIG_PATH) as f:
-            return json.load(f)
+            cfg = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return dict(DEFAULT_CONFIG)
+    # Migrate: ensure all defaults are present with correct types
+    for key, default_val in DEFAULT_CONFIG.items():
+        if key not in cfg:
+            cfg[key] = default_val
+            migrated = True
+        elif isinstance(default_val, int):
+            try:
+                v = int(cfg[key])
+                if v != cfg[key]:
+                    migrated = True
+                cfg[key] = v
+            except (ValueError, TypeError):
+                cfg[key] = default_val
+                migrated = True
+        elif isinstance(default_val, bool):
+            if not isinstance(cfg[key], bool):
+                cfg[key] = str(cfg[key]).lower() in ("true", "1", "yes")
+                migrated = True
+    if migrated:
+        _save_config(cfg)
+    return cfg
 
 
 def _save_conversation(name, messages):
@@ -771,19 +794,25 @@ def _format_conversation(messages):
 # Main loop
 # ---------------------------------------------------------------------------
 
-def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=True,
-             auto_continue=True, model_timeout=300, stuck_threshold=10, initial_task=None):
-    """Run the interactive mite loop."""
+def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=None,
+             auto_continue=None, model_timeout=None, stuck_threshold=None, initial_task=None):
+    """Run the interactive mite loop.
+
+    Config values are loaded from ~/.mite/config.json first, then explicit
+    CLI/function-arg values override them.  Pass None for a key to defer to
+    the config file (or its built-in default).
+    """
     _setup_readline()
     _ensure_userdata_dir()
 
     cfg = _load_config()
-    if "show_sysinfo" in cfg and not isinstance(cfg["show_sysinfo"], bool):
-        cfg["show_sysinfo"] = str(cfg["show_sysinfo"]).lower() == "true"
-    show_sysinfo = cfg.get("show_sysinfo", show_sysinfo)
-    auto_continue = cfg.get("auto_continue", auto_continue)
-    model_timeout = cfg.get("model_timeout", model_timeout)
-    stuck_threshold = cfg.get("stuck_threshold", stuck_threshold)
+    cfgl = cfg  # short reference
+
+    # Resolve: config file → CLI override → built-in default
+    show_sysinfo = cfgl.get("show_sysinfo", True) if show_sysinfo is None else show_sysinfo
+    auto_continue = cfgl.get("auto_continue", True) if auto_continue is None else auto_continue
+    model_timeout = int(cfgl.get("model_timeout", 300)) if model_timeout is None else model_timeout
+    stuck_threshold = int(cfgl.get("stuck_threshold", 10)) if stuck_threshold is None else stuck_threshold
 
     workspace = os.path.join(_USERDATA, "project-x")
     os.makedirs(workspace, exist_ok=True)
@@ -862,6 +891,7 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=T
         try:
             user_input = input(">>> ")
         except (EOFError, KeyboardInterrupt):
+            _auto_save_conversation(messages)
             print()
             break
 
@@ -875,6 +905,7 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=T
             command = cmd[0].lower() if cmd else ""
 
             if command == "exit":
+                _auto_save_conversation(messages)
                 print("  Goodbye!")
                 break
 
