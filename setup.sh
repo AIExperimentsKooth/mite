@@ -2,7 +2,7 @@
 # Mite setup script — installs backend (Ollama or llama.cpp), creates venv, pulls model
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}"") && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 echo ""
