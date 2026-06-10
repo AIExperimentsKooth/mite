@@ -21,6 +21,7 @@ Examples:
   mite --no-sysinfo             Skip system information report
   mite --host http://192.168.1.5:11434  Connect to remote Ollama
   mite --no-auto-continue      Disable auto-continue (wait after every step)
+  mite --stuck-threshold 15   No-tool replies before stuck detection (default: 10)
         """
     )
     parser.add_argument("task", nargs="?", help="Task to execute (omit for interactive mode)")
@@ -48,6 +49,8 @@ Examples:
                         help="Skip system information report at startup")
     parser.add_argument("--no-auto-continue", action="store_true",
                         help="Disable auto-continue (wait for input after every step)")
+    parser.add_argument("--stuck-threshold", type=int, default=None,
+                        help="No-tool replies before stuck detection (default: 10)")
     args = parser.parse_args()
     if args.version:
         print(f"Mite v{__version__}")
@@ -74,7 +77,8 @@ Examples:
             host=args.host,
             initial_task=args.task,
             show_sysinfo=not args.no_sysinfo,
-            auto_continue=not args.no_auto_continue
+            auto_continue=not args.no_auto_continue,
+            stuck_threshold=args.stuck_threshold
         )
     except KeyboardInterrupt:
         print("\n  Interrupted.")
