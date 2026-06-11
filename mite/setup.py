@@ -280,7 +280,7 @@ def install_llamacpp():
     if arch == "i686":
         cmake_args.append("-DLLAMA_NATIVE=OFF")
 
-    result = subprocess.run(cmake_args, capture_output=True, text=True, timeout=300)
+    result = subprocess.run(cmake_args, capture_output=True, text=True, timeout=600)
     if result.returncode != 0:
         print(f"  \u26a0 CMake configure failed: {result.stderr[:300]}")
         return False
@@ -307,7 +307,13 @@ def install_llamacpp():
                 # Print a compact progress indicator (last 80 chars of each relevant line)
                 short = line.strip()[-80:] if len(line.strip()) > 80 else line.strip()
                 print(f"    {short}")
-    build_proc.wait()
+    try:
+        build_proc.wait(timeout=7200)  # up to 2h for very slow devices
+    except subprocess.TimeoutExpired:
+        build_proc.kill()
+        print(f"  \u26a0 Build still running after 2 hours. Try increasing -j or building manually.")
+        print(f"  Last output: {last_line[:200]}")
+        return False
     if build_proc.returncode != 0:
         print(f"  \u26a0 Build failed (exit code {build_proc.returncode})")
         print(f"  Last output: {last_line[:200]}")
@@ -424,17 +430,27 @@ def start_llamacpp(model: str, host: str = "http://localhost:8080"):
                  "--host", "0.0.0.0",
                  "--port", "8080",
                  "-c", "4096",     # context size
-                 "--mlock",        # lock memory to avoid swapping
                  "-ngl", "0",      # no GPU layers (pure CPU)
                  ],
                 stdout=log,
                 stderr=subprocess.STDOUT,
             )
-        time.sleep(3)
-        return True
     except Exception as e:
         print(f"  \u26a0 Failed to start llama.cpp: {e}")
         return False
+    # Poll until ready (up to 120s — slow devices need time)
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        try:
+            req = urllib.request.Request(f"{host}/v1/models")
+            urllib.request.urlopen(req, timeout=3)
+            print(f"  \u2705 llama.cpp server started on {host}")
+            return True
+        except (urllib.error.URLError, ConnectionRefusedError, ConnectionError):
+            time.sleep(2)
+    print(f"  \u26a0 llama.cpp server not ready after 120s")
+    print(f"  Check log: {log_path}")
+    return False
 
 
 def wait_for_llamacpp(max_wait: int = 60, host: str = "http://localhost:8080"):

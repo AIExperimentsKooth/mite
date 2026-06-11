@@ -845,6 +845,10 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=N
     backend = cfgl.get("backend", "ollama") if backend is None else backend
     debug = cfgl.get("debug", False) if debug is None else debug
 
+    # Auto-detect host for llama.cpp: default to 8080 instead of 11434
+    if backend == "llamacpp" and host in ("http://localhost:11434", "http://0.0.0.0:11434"):
+        host = "http://localhost:8080"
+
     workspace = os.path.join(_USERDATA, "project-x")
     os.makedirs(workspace, exist_ok=True)
     os.chdir(workspace)
