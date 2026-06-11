@@ -212,6 +212,12 @@ def web_search(query: str, count: int = 5) -> str:
     q = query.strip()
     encoded = urllib.parse.quote(q)
 
+    # Ensure count is an int (parser returns all values as strings)
+    try:
+        count = int(count)
+    except (TypeError, ValueError):
+        count = 5
+
     headers = {"User-Agent": "Mozilla/5.0 (compatible; Mite/1.0)"}
     lines = []
 
