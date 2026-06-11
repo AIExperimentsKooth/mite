@@ -162,7 +162,7 @@ def _auto_setup(model: str, host: str, auto_confirm: bool = False, backend: str 
         setup.start_ollama()
         setup.wait_for_ollama()
         setup.pull_model(model)
-        setup.test_ollama(model)
+        setup.verify_ollama(model)
     else:
         setup.start_ollama()
         setup.wait_for_ollama()

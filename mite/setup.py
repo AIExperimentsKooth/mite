@@ -127,7 +127,7 @@ def pull_model(model: str):
     return True
 
 
-def test_ollama(model: str):
+def verify_ollama(model: str):
     """Quick test: verify Ollama model responds."""
     print(f"  \u23f3 Testing model...")
     try:
@@ -356,7 +356,7 @@ def check_llamacpp_endpoint(host: str = "0.0.0.0", port: int = 8080) -> bool:
         return False
 
 
-def test_llamacpp(host: str = "0.0.0.0", port: int = 8080):
+def verify_llamacpp(host: str = "0.0.0.0", port: int = 8080):
     """Quick test: verify llama.cpp server responds."""
     server_url = f"http://{host}:{port}"
     print("  \u23f3 Testing llama.cpp...")
@@ -410,7 +410,7 @@ def run(model: str, backend: str = "auto", host: str = "0.0.0.0", port: int = 80
             sys.exit(1)
         if not wait_for_llamacpp(host=host, port=port):
             sys.exit(1)
-        test_llamacpp(host=host, port=port)
+        verify_llamacpp(host=host, port=port)
         print(f"\n  \u2705 Setup complete! Using llama.cpp backend (model: {model}).\n")
         print("  Run: mite --backend llamacpp")
     else:
@@ -423,5 +423,5 @@ def run(model: str, backend: str = "auto", host: str = "0.0.0.0", port: int = 80
             sys.exit(1)
         if not pull_model(model):
             sys.exit(1)
-        test_ollama(model)
+        verify_ollama(model)
         print(f"\n  \u2705 Setup complete! Model '{model}' is ready.\n")
