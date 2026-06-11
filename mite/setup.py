@@ -153,19 +153,14 @@ def test_ollama(model: str):
 
 
 # ---------------------------------------------------------------------------
-# llama.cpp backend
+# llama.cpp backend (via llama-cpp-python[server])
 # ---------------------------------------------------------------------------
 
 def _llamacpp_dir() -> str:
-    """Get the llama.cpp installation directory under ~/.mite/."""
+    """Get the llama.cpp data directory under ~/.mite/."""
     d = os.path.join(os.path.expanduser("~"), ".mite", "llamacpp")
     os.makedirs(d, exist_ok=True)
     return d
-
-
-def _llama_server_path() -> str:
-    """Path to the llama-server binary."""
-    return os.path.join(_llamacpp_dir(), "build", "bin", "llama-server")
 
 
 def _models_dir() -> str:
@@ -176,155 +171,32 @@ def _models_dir() -> str:
 
 
 def check_llamacpp() -> bool:
-    """Check if llama.cpp server binary exists."""
-    return os.path.isfile(_llama_server_path())
+    """Check if llama-cpp-python is installed."""
+    import importlib.util
+    return importlib.util.find_spec("llama_cpp") is not None
 
 
-def check_build_tools() -> bool:
-    """Check if cmake, make, and a C++ compiler are available."""
-    cmake = shutil.which("cmake")
-    make = shutil.which("make")
-    cc = shutil.which("g++") or shutil.which("c++") or shutil.which("clang++")
-    missing = []
-    if not cmake:
-        missing.append("cmake")
-    if not make:
-        missing.append("make")
-    if not cc:
-        missing.append("C++ compiler (g++/clang++)")
-    if missing:
-        print(f"  \u26a0 Missing build tools: {', '.join(missing)}")
-        print("  Install them with your package manager, e.g.:")
-        print("    apt-get install build-essential cmake")
-        return False
-    return True
-
-
-def install_build_tools():
-    """Try to install build tools via package manager."""
-    print("  \u23f3 Installing build tools...")
-    if shutil.which("apt-get"):
-        result = subprocess.run(
-            ["apt-get", "update", "-qq"],
-            capture_output=True, text=True, timeout=120
-        )
-        result = subprocess.run(
-            ["apt-get", "install", "-y", "-qq", "build-essential", "cmake"],
-            capture_output=True, text=True, timeout=300
-        )
-        if result.returncode == 0:
-            print("  \u2705 Build tools installed")
-            return True
-        print(f"  \u26a0 Failed to install: {result.stderr[:200]}")
-        return False
-    else:
-        print("  \u26a0 Please install build-essential and cmake manually")
-        return False
-
-
-def install_llamacpp():
-    """Build llama.cpp from source for the current architecture.
-
-    This is the only reliable way to get llama.cpp working on i686 and
-    other architectures that don't have pre-built binaries.
-    """
-    dest = _llamacpp_dir()
-    server_path = _llama_server_path()
-
-    if check_llamacpp():
-        print("  \u2705 llama.cpp server already built")
-        return True
-
-    # Ensure build tools
-    if not check_build_tools():
-        if not install_build_tools():
-            return False
-
-    print("  \u23f3 Cloning llama.cpp (shallow)...")
-    repo_dir = os.path.join(dest, "source")
-    if not os.path.isdir(repo_dir):
-        result = subprocess.run(
-            ["git", "clone", "--depth=1",
-             "https://github.com/ggerganov/llama.cpp",
-             repo_dir],
-            capture_output=True, text=True, timeout=120
-        )
-        if result.returncode != 0:
-            print(f"  \u26a0 Clone failed: {result.stderr[:200]}")
-            return False
-        print("  \u2705 Repository cloned")
-    else:
-        print("  \u2014 Repository already exists, updating...")
-        subprocess.run(
-            ["git", "-C", repo_dir, "pull"],
-            capture_output=True, text=True, timeout=30
-        )
-
-    print("  \u23f3 Building llama.cpp (this may take a while on slower devices)...")
-    build_dir = os.path.join(dest, "build")
-    os.makedirs(build_dir, exist_ok=True)
-
-    # Disable GPU acceleration — we want maximum portability
-    cmake_args = [
-        "cmake", repo_dir,
-        "-B", build_dir,
-        "-DLLAMA_CUDA=OFF",
-        "-DLLAMA_METAL=OFF",
-        "-DLLAMA_VULKAN=OFF",
-        "-DLLAMA_OPENBLAS=OFF",
-        "-DLLAMA_LLAMAFILE=OFF",
-        "-DCMAKE_BUILD_TYPE=Release",
-    ]
-    # On i686 / 32-bit ARM, add flags for better performance
-    arch = detect_arch()
-    if arch == "i686":
-        cmake_args.append("-DLLAMA_NATIVE=OFF")
-
-    result = subprocess.run(cmake_args, capture_output=True, text=True, timeout=600)
-    if result.returncode != 0:
-        print(f"  \u26a0 CMake configure failed: {result.stderr[:300]}")
-        return False
-
-    # Build only the server (faster than everything)
-    cpu_count = os.cpu_count() or 1
-    print(f"  \u23f3 Building llama.cpp server (-j {cpu_count})...")
-    print(f"    (this can take 10-60+ minutes on slower devices)")
-    build_cmd = ["cmake", "--build", build_dir, "--target", "llama-server",
-                  "-j", str(cpu_count)]
-    build_proc = subprocess.Popen(
-        build_cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,  # line-buffered
+def install_llamacpp_python():
+    """Install llama-cpp-python[server] via pip."""
+    print("  \u23f3 Installing llama-cpp-python[server] via pip...")
+    print("    (this may compile from source on older architectures,")
+    print("     but pip handles caching and retries automatically)")
+    python = sys.executable
+    result = subprocess.run(
+        [python, "-m", "pip", "install", "llama-cpp-python[server]"],
+        capture_output=True, text=True, timeout=900  # up to 15m for compilation
     )
-    last_line = ""
-    if build_proc.stdout:
-        for line in build_proc.stdout:
-            line = line.rstrip()
-            if line:
-                last_line = line
-                # Print a compact progress indicator (last 80 chars of each relevant line)
-                short = line.strip()[-80:] if len(line.strip()) > 80 else line.strip()
-                print(f"    {short}")
-    try:
-        build_proc.wait(timeout=7200)  # up to 2h for very slow devices
-    except subprocess.TimeoutExpired:
-        build_proc.kill()
-        print(f"  \u26a0 Build still running after 2 hours. Try increasing -j or building manually.")
-        print(f"  Last output: {last_line[:200]}")
+    if result.returncode != 0:
+        err = result.stderr.strip()[-400:]
+        print(f"  \u26a0 pip install failed: {err}")
+        print("  Try installing manually:")
+        print(f"    {python} -m pip install llama-cpp-python[server]")
         return False
-    if build_proc.returncode != 0:
-        print(f"  \u26a0 Build failed (exit code {build_proc.returncode})")
-        print(f"  Last output: {last_line[:200]}")
+    if not check_llamacpp():
+        print("  \u26a0 Installed but package not importable — check for errors above")
         return False
-
-    if check_llamacpp():
-        print(f"  \u2705 llama.cpp server built ({arch})")
-        return True
-
-    print("  \u26a0 Build completed but server binary not found")
-    return False
+    print("  \u2705 llama-cpp-python[server] installed")
+    return True
 
 
 def resolve_gguf_model(model_spec: str) -> str:
@@ -397,7 +269,7 @@ def _approx_size_str(filename: str) -> str:
 
 
 def start_llamacpp(model: str, host: str = "http://localhost:8080"):
-    """Start the llama.cpp server with the given model."""
+    """Start the llama-cpp-python server with the given model."""
     import urllib.error
 
     # Check if already running
@@ -408,9 +280,8 @@ def start_llamacpp(model: str, host: str = "http://localhost:8080"):
     except (urllib.error.URLError, ConnectionRefusedError, ConnectionError):
         pass
 
-    server_path = _llama_server_path()
-    if not os.path.isfile(server_path):
-        print("  \u26a0 llama.cpp server not built. Run setup first.")
+    if not check_llamacpp():
+        print("  \u26a0 llama-cpp-python not installed. Run setup first.")
         return False
 
     # Resolve model path
@@ -425,18 +296,18 @@ def start_llamacpp(model: str, host: str = "http://localhost:8080"):
     try:
         with open(log_path, "w") as log:
             subprocess.Popen(
-                [server_path,
-                 "-m", model_path,
+                [sys.executable, "-m", "llama_cpp.server",
+                 "--model", model_path,
                  "--host", "0.0.0.0",
                  "--port", "8080",
-                 "-c", "4096",     # context size
-                 "-ngl", "0",      # no GPU layers (pure CPU)
+                 "--n_ctx", "4096",
+                 "--n_gpu_layers", "0",
                  ],
                 stdout=log,
                 stderr=subprocess.STDOUT,
             )
     except Exception as e:
-        print(f"  \u26a0 Failed to start llama.cpp: {e}")
+        print(f"  \u26a0 Failed to start llama.cpp server: {e}")
         return False
     # Poll until ready (up to 120s — slow devices need time)
     deadline = time.time() + 120
@@ -470,7 +341,7 @@ def wait_for_llamacpp(max_wait: int = 60, host: str = "http://localhost:8080"):
 
 
 def test_llamacpp(host: str = "http://localhost:8080"):
-    """Quick test: verify llama.cpp responds."""
+    """Quick test: verify llama.cpp server responds."""
     print("  \u23f3 Testing llama.cpp...")
     try:
         payload = json.dumps({
@@ -512,10 +383,10 @@ def run(model: str, backend: str = "auto"):
 
     if backend == "llamacpp":
         if not check_llamacpp():
-            if not install_llamacpp():
+            if not install_llamacpp_python():
                 sys.exit(1)
         else:
-            print("  \u2705 llama.cpp already installed")
+            print("  \u2705 llama-cpp-python already installed")
         if not start_llamacpp(model):
             sys.exit(1)
         if not wait_for_llamacpp():
