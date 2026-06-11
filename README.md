@@ -47,6 +47,32 @@ Or without cloning:
 curl -fsSL https://raw.githubusercontent.com/your/mite/main/setup.sh | bash
 ```
 
+### Backends
+
+Mite supports two backends:
+
+**Ollama** (default on 64-bit) — installs from [ollama.com](https://ollama.com):
+- Any Ollama model (`qwen2.5`, `llama3.2`, `phi`, `gemma`, etc.)
+- Auto-pulls model on first run · Default port: 11434
+
+**llama.cpp via Python** (default on 32-bit / i686 / ARM):
+- `pip install llama-cpp-python[server]` — no cmake/git needed
+- Downloads GGUF models from HuggingFace automatically
+- Runs on port 8080
+
+```bash
+# Use llama.cpp (instead of default Ollama)
+mite --backend llamacpp
+
+# Switch mid-session
+/config backend llamacpp
+
+# Use a specific port
+mite --backend llamacpp --host http://localhost:8080
+```
+
+On 32-bit systems (i686, ARMv6/7) Mite auto-selects llama.cpp since Ollama doesn't support those architectures.
+
 ## Usage
 
 ```bash
@@ -500,7 +526,7 @@ mite/
 │   ├── core.py        # Main interaction loop + command handlers
 │   ├── tools.py       # File/shell/search tool implementations
 │   ├── prompts.py     # System prompts optimized for small models
-│   ├── setup.py       # Ollama install + model pull
+│   ├── setup.py       # Backend setup (Ollama / llama-cpp-python)
 │   └── task_manager.py # Task queue + schedule management
 ├── update.sh           # Self-update script (backup → clone → restore)
 ├── setup.sh            # One-click setup script
