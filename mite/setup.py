@@ -344,6 +344,18 @@ def wait_for_llamacpp(max_wait: int = 60, host: str = "0.0.0.0", port: int = 808
     return False
 
 
+def check_llamacpp_endpoint(host: str = "0.0.0.0", port: int = 8080) -> bool:
+    """Check if a llama.cpp endpoint is reachable (for external endpoints)."""
+    import urllib.error
+    server_url = f"http://{host}:{port}"
+    try:
+        req = urllib.request.Request(f"{server_url}/v1/models")
+        urllib.request.urlopen(req, timeout=5)
+        return True
+    except (urllib.error.URLError, ConnectionRefusedError, ConnectionError, OSError):
+        return False
+
+
 def test_llamacpp(host: str = "0.0.0.0", port: int = 8080):
     """Quick test: verify llama.cpp server responds."""
     server_url = f"http://{host}:{port}"

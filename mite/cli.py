@@ -75,7 +75,8 @@ Examples:
         _run_update(args.yes, branch)
         return
     if not args.no_setup:
-        _auto_setup(args.model, args.host, args.yes, backend=args.backend)
+        _auto_setup(args.model, args.host, args.yes, backend=args.backend,
+                    llamacpp_host=args.llamacpp_host, llamacpp_port=args.port)
     if args.setup:
         return
     try:
@@ -101,7 +102,8 @@ Examples:
         sys.exit(1)
 
 
-def _auto_setup(model: str, host: str, auto_confirm: bool = False, backend: str = "auto"):
+def _auto_setup(model: str, host: str, auto_confirm: bool = False, backend: str = "auto",
+                llamacpp_host: str = None, llamacpp_port: int = None):
     import subprocess
     import shutil
     from . import setup
@@ -110,13 +112,22 @@ def _auto_setup(model: str, host: str, auto_confirm: bool = False, backend: str 
         backend = setup.suggest_backend()
 
     if backend == "llamacpp":
+        port = llamacpp_port or 8080
+        lhost = llamacpp_host or "0.0.0.0"
+
+        # Is this an external endpoint?  If the host isn't local, skip server
+        # startup and just verify the endpoint is reachable.
+        if lhost not in ("0.0.0.0", "127.0.0.1", "localhost", ""):
+            print(f"  \U0001f310 Connecting to external endpoint http://{lhost}:{port}...")
+            if not setup.check_llamacpp_endpoint(lhost, port):
+                print(f"  \u26a0 Cannot reach {lhost}:{port} — is the server running?")
+                print("  Check your config: /config llamacpp_host /config llamacpp_port")
+                sys.exit(1)
+            print(f"  \u2705 External endpoint reachable")
+            return
+
         print(f"  \u2699 Setting up llama.cpp backend for {setup.detect_arch()}...")
-        if not auto_confirm:
-            response = input("  Build llama.cpp from source + download model? [Y/n]: ").strip().lower()
-            if response in ("n", "no"):
-                print("  Setup skipped. Run: python -m mite --setup")
-                return
-        setup.run(model, backend="llamacpp")
+        setup.run(model, backend="llamacpp", host=lhost, port=port)
         return
 
     # Ollama path
