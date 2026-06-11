@@ -268,13 +268,15 @@ def _approx_size_str(filename: str) -> str:
     return "large file"
 
 
-def start_llamacpp(model: str, host: str = "http://localhost:8080"):
+def start_llamacpp(model: str, host: str = "0.0.0.0", port: int = 8080):
     """Start the llama-cpp-python server with the given model."""
     import urllib.error
 
+    server_url = f"http://{host}:{port}"
+
     # Check if already running
     try:
-        req = urllib.request.Request(f"{host}/v1/models")
+        req = urllib.request.Request(f"{server_url}/v1/models")
         urllib.request.urlopen(req, timeout=3)
         return True
     except (urllib.error.URLError, ConnectionRefusedError, ConnectionError):
@@ -298,8 +300,8 @@ def start_llamacpp(model: str, host: str = "http://localhost:8080"):
             subprocess.Popen(
                 [sys.executable, "-m", "llama_cpp.server",
                  "--model", model_path,
-                 "--host", "0.0.0.0",
-                 "--port", "8080",
+                 "--host", host,
+                 "--port", str(port),
                  "--n_ctx", "4096",
                  "--n_gpu_layers", "0",
                  ],
@@ -313,9 +315,9 @@ def start_llamacpp(model: str, host: str = "http://localhost:8080"):
     deadline = time.time() + 120
     while time.time() < deadline:
         try:
-            req = urllib.request.Request(f"{host}/v1/models")
+            req = urllib.request.Request(f"{server_url}/v1/models")
             urllib.request.urlopen(req, timeout=3)
-            print(f"  \u2705 llama.cpp server started on {host}")
+            print(f"  \u2705 llama.cpp server started on {server_url}")
             return True
         except (urllib.error.URLError, ConnectionRefusedError, ConnectionError):
             time.sleep(2)
@@ -324,14 +326,16 @@ def start_llamacpp(model: str, host: str = "http://localhost:8080"):
     return False
 
 
-def wait_for_llamacpp(max_wait: int = 60, host: str = "http://localhost:8080"):
+
+def wait_for_llamacpp(max_wait: int = 60, host: str = "0.0.0.0", port: int = 8080):
     """Wait for llama.cpp server to become available."""
+    server_url = f"http://{host}:{port}"
     deadline = time.time() + max_wait
     while time.time() < deadline:
         try:
-            req = urllib.request.Request(f"{host}/v1/models")
+            req = urllib.request.Request(f"{server_url}/v1/models")
             urllib.request.urlopen(req, timeout=3)
-            print(f"  \u2705 llama.cpp server ready on {host}")
+            print(f"  \u2705 llama.cpp server ready on {server_url}")
             return True
         except (urllib.error.URLError, ConnectionRefusedError, ConnectionError):
             time.sleep(2)
@@ -340,8 +344,9 @@ def wait_for_llamacpp(max_wait: int = 60, host: str = "http://localhost:8080"):
     return False
 
 
-def test_llamacpp(host: str = "http://localhost:8080"):
+def test_llamacpp(host: str = "0.0.0.0", port: int = 8080):
     """Quick test: verify llama.cpp server responds."""
+    server_url = f"http://{host}:{port}"
     print("  \u23f3 Testing llama.cpp...")
     try:
         payload = json.dumps({
@@ -351,7 +356,7 @@ def test_llamacpp(host: str = "http://localhost:8080"):
             "temperature": 0.2,
         }).encode()
         req = urllib.request.Request(
-            f"{host}/v1/chat/completions",
+            f"{server_url}/v1/chat/completions",
             data=payload,
             headers={"Content-Type": "application/json"}
         )
@@ -370,12 +375,14 @@ def test_llamacpp(host: str = "http://localhost:8080"):
 # Unified setup
 # ---------------------------------------------------------------------------
 
-def run(model: str, backend: str = "auto"):
+def run(model: str, backend: str = "auto", host: str = "0.0.0.0", port: int = 8080):
     """Full setup: install backend, start server, pull model, test.
 
     Args:
         model: Model name/spec string.
         backend: "ollama", "llamacpp", or "auto" (auto-detect).
+        host: Bind host for the llama.cpp server (default: "0.0.0.0").
+        port: Port for the llama.cpp server (default: 8080).
     """
     if backend == "auto":
         backend = suggest_backend()
@@ -387,11 +394,11 @@ def run(model: str, backend: str = "auto"):
                 sys.exit(1)
         else:
             print("  \u2705 llama-cpp-python already installed")
-        if not start_llamacpp(model):
+        if not start_llamacpp(model, host=host, port=port):
             sys.exit(1)
-        if not wait_for_llamacpp():
+        if not wait_for_llamacpp(host=host, port=port):
             sys.exit(1)
-        test_llamacpp()
+        test_llamacpp(host=host, port=port)
         print(f"\n  \u2705 Setup complete! Using llama.cpp backend (model: {model}).\n")
         print("  Run: mite --backend llamacpp")
     else:

@@ -21,8 +21,9 @@ Examples:
   mite --no-sysinfo             Skip system information report
   mite --host http://192.168.1.5:11434  Connect to remote Ollama
   mite --no-auto-continue      Disable auto-continue (wait after every step)
-  mite --stuck-threshold 15   No-tool replies before stuck detection (default: 10)
   mite --backend llamacpp     Use llama.cpp backend instead of Ollama (default: ollama)
+  mite --port 8081            Set the llama.cpp server port (default: 8080)
+  mite --llamacpp-host 0.0.0.0    Set the llama.cpp server bind host
   mite --setup --backend llamacpp  Setup llama.cpp backend on i686/ARM
         """
     )
@@ -55,6 +56,10 @@ Examples:
                         help="No-tool replies before stuck detection (default: 10)")
     parser.add_argument("--backend", default=None, choices=["ollama", "llamacpp"],
                         help="LLM backend to use (ollama or llamacpp, default: ollama)")
+    parser.add_argument("--port", type=int, default=None,
+                        help="Set the llama.cpp server port (default: 8080)")
+    parser.add_argument("--llamacpp-host", default=None,
+                        help="Set the llama.cpp server bind host (default: 0.0.0.0)")
     args = parser.parse_args()
     if args.version:
         print(f"Mite v{__version__}")
@@ -82,7 +87,9 @@ Examples:
             auto_continue=None if args.no_auto_continue is None else (not args.no_auto_continue),
             stuck_threshold=args.stuck_threshold,
             backend=args.backend,
-            debug=True if args.debug else None
+            debug=True if args.debug else None,
+            llamacpp_host=args.llamacpp_host,
+            llamacpp_port=args.port,
         )
     except KeyboardInterrupt:
         print("\n  Interrupted.")

@@ -48,7 +48,7 @@ Commands:
   /load <name>  Load conversation
   /list       List saved conversations
   /config     Show config
-  /config <key> <value>  Set config (show_sysinfo, auto_continue, model_timeout, stuck_threshold, backend, debug)
+  /config <key> <value>  Set config (show_sysinfo, auto_continue, model_timeout, stuck_threshold, backend, debug, llamacpp_host, llamacpp_port)
   /queue      Manage task queue (add <task> | list | remove <id> | clear | start | stop)
   /schedule   Manage scheduled tasks (add <interval> <task> | list | remove <id> | clear | pause | resume)
   /help       Show this help
@@ -84,6 +84,8 @@ DEFAULT_CONFIG = {
     "stuck_threshold": 10,
     "backend": "ollama",
     "debug": False,
+    "llamacpp_host": "0.0.0.0",
+    "llamacpp_port": 8080,
 }
 
 
@@ -824,7 +826,8 @@ def _format_conversation(messages):
 # ---------------------------------------------------------------------------
 
 def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=None,
-             auto_continue=None, model_timeout=None, stuck_threshold=None, backend=None, debug=None, initial_task=None):
+             auto_continue=None, model_timeout=None, stuck_threshold=None, backend=None, debug=None,
+             llamacpp_host=None, llamacpp_port=None, initial_task=None):
     """Run the interactive mite loop.
 
     Config values are loaded from ~/.mite/config.json first, then explicit
@@ -844,10 +847,12 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=N
     stuck_threshold = int(cfgl.get("stuck_threshold", 10)) if stuck_threshold is None else stuck_threshold
     backend = cfgl.get("backend", "ollama") if backend is None else backend
     debug = cfgl.get("debug", False) if debug is None else debug
+    llamacpp_host = cfgl.get("llamacpp_host", "0.0.0.0") if llamacpp_host is None else llamacpp_host
+    llamacpp_port = int(cfgl.get("llamacpp_port", 8080)) if llamacpp_port is None else llamacpp_port
 
-    # Auto-detect host for llama.cpp: default to 8080 instead of 11434
-    if backend == "llamacpp" and host in ("http://localhost:11434", "http://0.0.0.0:11434"):
-        host = "http://localhost:8080"
+    # Build the llamacpp endpoint URL from host + port
+    if backend == "llamacpp":
+        host = f"http://{llamacpp_host}:{llamacpp_port}"
 
     workspace = os.path.join(_USERDATA, "project-x")
     os.makedirs(workspace, exist_ok=True)
@@ -1020,6 +1025,8 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=N
                     print(f"  stuck_threshold: {stuck_threshold}")
                     print(f"  backend: {backend}")
                     print(f"  debug: {debug}")
+                    print(f"  llamacpp_host: {llamacpp_host}")
+                    print(f"  llamacpp_port: {llamacpp_port}")
                 elif len(cmd) >= 3:
                     key = cmd[1]
                     value = cmd[2]
@@ -1062,6 +1069,19 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=N
                         cfg["debug"] = debug
                         _save_config(cfg)
                         print(f"  debug = {debug}")
+                    elif key == "llamacpp_host":
+                        llamacpp_host = value
+                        cfg["llamacpp_host"] = llamacpp_host
+                        _save_config(cfg)
+                        print(f"  llamacpp_host = {llamacpp_host}")
+                    elif key == "llamacpp_port":
+                        try:
+                            llamacpp_port = int(value)
+                            cfg["llamacpp_port"] = llamacpp_port
+                            _save_config(cfg)
+                            print(f"  llamacpp_port = {llamacpp_port}")
+                        except ValueError:
+                            print("  Invalid port value")
                     else:
                         print(f"  Unknown config key: {key}")
                 else:
