@@ -54,6 +54,8 @@ Examples:
                         help="Disable auto-continue (wait for input after every step; also: --auto-continue)")
     parser.add_argument("--stuck-threshold", type=int, default=None,
                         help="No-tool replies before stuck detection (default: 10)")
+    parser.add_argument("--model-timeout", type=int, default=None,
+                        help="LLM request timeout in seconds (default: 300)")
     parser.add_argument("--backend", default=None, choices=["ollama", "llamacpp"],
                         help="LLM backend to use (ollama or llamacpp, default: ollama)")
     parser.add_argument("--port", type=int, default=None,
@@ -87,6 +89,7 @@ Examples:
             show_sysinfo=None if args.no_sysinfo is None else (not args.no_sysinfo),
             auto_continue=None if args.no_auto_continue is None else (not args.no_auto_continue),
             stuck_threshold=args.stuck_threshold,
+            model_timeout=args.model_timeout,
             backend=args.backend,
             debug=True if args.debug else None,
             llamacpp_host=args.llamacpp_host,

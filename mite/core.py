@@ -524,6 +524,7 @@ def _call_llm(model, messages, host="http://localhost:11434", timeout=300, backe
     """
     import urllib.request
     import urllib.error
+    import socket
 
     if backend == "llamacpp":
         url = f"{host}/v1/chat/completions"
@@ -557,8 +558,10 @@ def _call_llm(model, messages, host="http://localhost:11434", timeout=300, backe
     except urllib.error.HTTPError as e:
         body = e.read().decode()
         return f"[LLM ERROR] HTTP {e.code}: {body}"
+    except socket.timeout as e:
+        return f"[LLM ERROR] Request timed out after {timeout}s. Try increasing model_timeout."
     except urllib.error.URLError as e:
-        return f"[LLM ERROR] {e.reason} - Is the server running?"
+        return f"[LLM ERROR] {e.reason} (timeout={timeout}s). Is the server running?"
     except Exception as e:
         return f"[LLM ERROR] {e}"
 
@@ -1204,7 +1207,7 @@ def _process_user_task(user_input, system_prompt, messages, model, host, history
             if not sched_task_mode:
                 print("  \u26a0 No response from model")
             break
-        if model_reply.startswith("[OLLAMA ERROR]"):
+        if model_reply.startswith("[OLLAMA ERROR]") or model_reply.startswith("[LLM ERROR]"):
             if not sched_task_mode:
                 print(f"  \u26a0 {model_reply}")
             break
