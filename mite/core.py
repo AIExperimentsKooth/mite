@@ -1284,12 +1284,19 @@ def _process_user_task(user_input, system_prompt, messages, model, host, history
 
         # --- Normal (non-scheduled) paths below ---
 
+        # Show the model's non-tool output so the user has visibility
+        # even during auto-continue. Print the full reply (short on first
+        # pass, but always let the user see what the model said).
+        if not sched_task_mode:
+            print(f"\n  \U0001f916 {model_reply[:200]}")
+
         if finish_state == "question":
-            if auto_continue and no_tool_count <= max_no_tool:
+            if auto_continue and no_tool_count < max_no_tool:
                 messages.append({"role": "user", "content": prompts.CONTINUE_PROMPT})
                 continue
             else:
-                print(f"\n  \U0001f916 {model_reply}")
+                if sched_task_mode:
+                    print(f"  \u26a0 Scheduled task aborted (stuck)\n")
                 break
 
         if no_tool_count >= max_no_tool:
@@ -1298,15 +1305,14 @@ def _process_user_task(user_input, system_prompt, messages, model, host, history
                 force_prompt_sent = True
                 continue
             else:
-                print(f"\n  \U0001f916 {model_reply[:200]}")
-                print(f"  \u26a0 Model seems stuck ({no_tool_count} no-tool replies). Returning to prompt.\n")
+                if not sched_task_mode:
+                    print(f"  \u26a0 Model seems stuck ({no_tool_count} no-tool replies). Returning to prompt.\n")
                 break
 
         if auto_continue:
             messages.append({"role": "user", "content": prompts.CONTINUE_PROMPT})
             continue
         else:
-            print(f"\n  \U0001f916 {model_reply[:200]}")
             break
 
     return False
