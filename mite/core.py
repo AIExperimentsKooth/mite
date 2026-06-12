@@ -850,8 +850,10 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=N
     llamacpp_host = cfgl.get("llamacpp_host", "0.0.0.0") if llamacpp_host is None else llamacpp_host
     llamacpp_port = int(cfgl.get("llamacpp_port", 8080)) if llamacpp_port is None else llamacpp_port
 
-    # Build the llamacpp endpoint URL from host + port
-    if backend == "llamacpp":
+    # Build the llamacpp endpoint URL — only when host wasn't explicitly set
+    # (user passed --host with a custom URL, use it directly)
+    default_ollama_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+    if backend == "llamacpp" and host == default_ollama_url:
         host = f"http://{llamacpp_host}:{llamacpp_port}"
 
     workspace = os.path.join(_USERDATA, "project-x")

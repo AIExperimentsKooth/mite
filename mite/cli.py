@@ -115,6 +115,22 @@ def _auto_setup(model: str, host: str, auto_confirm: bool = False, backend: str 
         port = llamacpp_port or 8080
         lhost = llamacpp_host or "0.0.0.0"
 
+        # If --host was explicitly provided (not the default Ollama URL), use
+        # it as an external OpenAI-compatible endpoint directly — skip local install.
+        default_ollama_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+        if host != default_ollama_url:
+            from urllib.parse import urlparse
+            parsed = urlparse(host)
+            lhost = parsed.hostname or lhost
+            if parsed.port:
+                port = parsed.port
+            print(f"  \U0001f310 Connecting to OpenAI-compatible endpoint {host}...")
+            if not setup.check_llamacpp_endpoint(lhost, port):
+                print(f"  \u26a0 Cannot reach {host} — is the server running?")
+                sys.exit(1)
+            print(f"  \u2705 Endpoint reachable")
+            return
+
         # Is this an external endpoint?  If the host isn't local, skip server
         # startup and just verify the endpoint is reachable.
         if lhost not in ("0.0.0.0", "127.0.0.1", "localhost", ""):
