@@ -1160,9 +1160,22 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=N
         last_prompt = raw_input
         history.append(("user", user_input))
 
-        _process_user_task(user_input, system_prompt, messages,
-                           model, host, history, auto_continue, model_timeout,
-                           stuck_threshold, backend, debug, task_queue, task_schedule)
+        try:
+            _process_user_task(user_input, system_prompt, messages,
+                               model, host, history, auto_continue, model_timeout,
+                               stuck_threshold, backend, debug, task_queue, task_schedule)
+        except KeyboardInterrupt:
+            print("\n  \u23f9 Interrupted. Returning to prompt.")
+            # Truncate any half-formed response the model may have left
+            while messages and messages[-1].get("role") == "assistant":
+                # If the model was mid-tool-call, strip its last reply
+                # so the conversation stays coherent on retry
+                tail = messages[-1].get("content", "")
+                if tail.startswith("[LLM ERROR]") or tail.startswith("[OLLAMA ERROR]"):
+                    messages.pop()
+                else:
+                    break
+            _auto_save_conversation(messages)
 
         _auto_save_conversation(messages)
 
@@ -1196,7 +1209,12 @@ def _process_user_task(user_input, system_prompt, messages, model, host, history
     from . import prompts  # import once
 
     while True:
-        model_reply = _call_llm(model, messages, host=host, timeout=model_timeout, backend=backend)
+        try:
+            model_reply = _call_llm(model, messages, host=host, timeout=model_timeout, backend=backend)
+        except KeyboardInterrupt:
+            if not sched_task_mode:
+                print("\n  \u23f9 Interrupted during model request.")
+            break
 
         # Debug: show raw model output before processing
         if debug:
@@ -1245,6 +1263,13 @@ def _process_user_task(user_input, system_prompt, messages, model, host, history
                     result_text = _TOOLS[name](**args)
                 except TypeError as e:
                     result_text = f"[ERROR] Invalid args for {name}: {e}"
+                except KeyboardInterrupt:
+                    if sched_task_mode:
+                        print(f"  \u26a0 Scheduled task interrupted during {name}\n")
+                    else:
+                        print(f"\n  \u23f9 Interrupted during {name}")
+                    # Still feed the interrupt to the model so it knows
+                    result_text = f"[INTERRUPTED] Tool {name} was cancelled by user"
             else:
                 result_text = f"[ERROR] Unknown tool: {name}"
 
