@@ -11,20 +11,15 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 Examples:
-  mite                          Interactive mode with default model
+  mite                          Interactive mode — auto-discover backends
   mite "fix the bug in main.py" Run a single task
   mite --model qwen2.5:3b       Use a larger model
-  mite --setup                  Run setup only (install Ollama, pull model)
+  mite --backend ollama         Skip discovery, use Ollama directly
+  mite --host http://192.168.1.5:11434  Connect to remote Ollama (no discovery)
   mite --update                 Update Mite to the latest version from GitHub
   mite --update --dev            Update from the dev branch
-  mite --branch dev              (same, for scripting)
-  mite --no-sysinfo             Skip system information report
-  mite --host http://192.168.1.5:11434  Connect to remote Ollama
   mite --no-auto-continue      Disable auto-continue (wait after every step)
-  mite --backend llamacpp     Use llama.cpp backend instead of Ollama (default: ollama)
-  mite --port 8081            Set the llama.cpp server port (default: 8080)
-  mite --llamacpp-host 0.0.0.0    Set the llama.cpp server bind host
-  mite --setup --backend llamacpp  Setup llama.cpp backend on i686/ARM
+  mite --no-sysinfo             Skip system information report
         """
     )
     parser.add_argument("task", nargs="?", help="Task to execute (omit for interactive mode)")
@@ -77,11 +72,19 @@ Examples:
         _run_update(args.yes, branch)
         return
     if not args.no_setup:
-        _auto_setup(args.model, args.host, args.yes, backend=args.backend,
-                    llamacpp_host=args.llamacpp_host, llamacpp_port=args.port)
+        # Run auto-setup only when the user explicitly specifies a backend
+        if args.backend is not None:
+            _auto_setup(args.model, args.host, args.yes, backend=args.backend,
+                        llamacpp_host=args.llamacpp_host, llamacpp_port=args.port)
     if args.setup:
+        # --setup alone: run setup with architecture-suggested backend
+        if args.backend is None:
+            _auto_setup(args.model, args.host, args.yes, backend="auto",
+                        llamacpp_host=args.llamacpp_host, llamacpp_port=args.port)
         return
     try:
+        # When no explicit backend is specified, run discovery (skips auto_setup)
+        use_discovery = args.backend is None
         core.run_loop(
             model=args.model,
             host=args.host,
@@ -94,6 +97,7 @@ Examples:
             debug=True if args.debug else None,
             llamacpp_host=args.llamacpp_host,
             llamacpp_port=args.port,
+            discover=use_discovery,
         )
     except KeyboardInterrupt:
         print("\n  Interrupted.")

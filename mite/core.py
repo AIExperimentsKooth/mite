@@ -86,6 +86,9 @@ DEFAULT_CONFIG = {
     "debug": False,
     "llamacpp_host": "0.0.0.0",
     "llamacpp_port": 8080,
+    "last_backend": None,
+    "last_host": None,
+    "last_model": None,
 }
 
 
@@ -825,17 +828,131 @@ def _format_conversation(messages):
 
 
 # ---------------------------------------------------------------------------
+# Backend selection — discover, present choices, let user pick
+# ---------------------------------------------------------------------------
+
+def _auto_select_backend(cfg: dict) -> tuple:
+    """Auto-detect accessible backends, let the user pick, return (backend, host, model).
+
+    Returns (backend_type, endpoint_url, model_name).
+    Falls back to last_* config values if no backends are found.
+    """
+    from . import setup as mite_setup
+
+    # Collect any custom probe hosts from config
+    custom_hosts = cfg.get("custom_probe_hosts", None)
+
+    print()
+    print("  \U0001f50d Scanning for accessible LLM backends...")
+    backends = mite_setup.discover_backends(custom_hosts)
+
+    if not backends:
+        # No backends found — try last used settings
+        last_backend = cfg.get("last_backend")
+        last_host = cfg.get("last_host")
+        last_model = cfg.get("last_model")
+        if last_backend and last_host and last_model:
+            print(f"  \u26a0 No backends found. Using last session: {last_backend} @ {last_host} ({last_model})")
+            return (last_backend, last_host, last_model)
+        print("  \u26a0 No backends found and no last session saved.")
+        print("  Start Ollama (ollama serve), LLMStudio, or another OpenAI-compatible server.")
+        print("  Then run mite again.")
+        print()
+        sys.exit(1)
+
+    print()
+    print(f"  Found {len(backends)} backend(s):")
+    print()
+
+    backend = None
+    selected_host = None
+    selected_model = None
+
+    if len(backends) == 1:
+        backend = backends[0]
+        label = "Ollama" if backend["backend"] == "ollama" else f"OpenAI-compatible ({backend['host']})"
+        models = backend["models"]
+        if len(models) == 1:
+            selected_model = models[0]
+            print(f"  \U0001f916 {label} — model: {selected_model}")
+            selected_host = backend["host"]
+        else:
+            print(f"  \U0001f916 {label}")
+            print(f"     Models:")
+            for i, m in enumerate(models, 1):
+                print(f"       [{i}] {m}")
+            print()
+            try:
+                choice = input("  Select model [1]: ").strip()
+                idx = int(choice) - 1 if choice else 0
+                selected_model = models[idx]
+            except (ValueError, IndexError):
+                selected_model = models[0]
+                print(f"  Using default: {selected_model}")
+            selected_host = backend["host"]
+    else:
+        print("  Multiple backends found. Pick one:")
+        for i, b in enumerate(backends, 1):
+            label = "Ollama" if b["backend"] == "ollama" else f"OpenAI-compatible ({b['host']})"
+            model_count = len(b["models"])
+            models_preview = ", ".join(b["models"][:3])
+            if model_count > 3:
+                models_preview += f", ... ({model_count} total)"
+            print(f"    [{i}] {label} — models: {models_preview}")
+        print()
+        try:
+            choice = input("  Select backend [1]: ").strip()
+            idx = int(choice) - 1 if choice else 0
+            backend = backends[idx]
+        except (ValueError, IndexError):
+            backend = backends[0]
+            print(f"  Using default: {'Ollama' if backend['backend'] == 'ollama' else backend['host']}")
+
+        if len(backend["models"]) == 1:
+            selected_model = backend["models"][0]
+            print(f"  Using model: {selected_model}")
+        else:
+            print(f"\n  Models for {'Ollama' if backend['backend'] == 'ollama' else backend['host']}:")
+            for i, m in enumerate(backend["models"], 1):
+                print(f"    [{i}] {m}")
+            print()
+            try:
+                choice = input("  Select model [1]: ").strip()
+                idx = int(choice) - 1 if choice else 0
+                selected_model = backend["models"][idx]
+            except (ValueError, IndexError):
+                selected_model = backend["models"][0]
+                print(f"  Using default: {selected_model}")
+
+        selected_host = backend["host"]
+
+    print()
+
+    # Save as last session
+    cfg["last_backend"] = backend["backend"]
+    cfg["last_host"] = selected_host
+    cfg["last_model"] = selected_model
+    _save_config(cfg)
+
+    return (backend["backend"], selected_host, selected_model)
+
+
+# ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
 
 def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=None,
              auto_continue=None, model_timeout=None, stuck_threshold=None, backend=None, debug=None,
-             llamacpp_host=None, llamacpp_port=None, initial_task=None):
+             llamacpp_host=None, llamacpp_port=None, initial_task=None, discover=True):
     """Run the interactive mite loop.
 
     Config values are loaded from ~/.mite/config.json first, then explicit
     CLI/function-arg values override them.  Pass None for a key to defer to
     the config file (or its built-in default).
+
+    When discover=True and no explicit backend is set, scans for accessible
+    LLM backends (Ollama, LLMStudio, llama.cpp, etc.) and prompts the user
+    to choose a backend and model.
     """
     _setup_readline()
     _ensure_userdata_dir()
@@ -853,11 +970,21 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=N
     llamacpp_host = cfgl.get("llamacpp_host", "0.0.0.0") if llamacpp_host is None else llamacpp_host
     llamacpp_port = int(cfgl.get("llamacpp_port", 8080)) if llamacpp_port is None else llamacpp_port
 
-    # Build the llamacpp endpoint URL — only when host wasn't explicitly set
-    # (user passed --host with a custom URL, use it directly)
-    default_ollama_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-    if backend == "llamacpp" and host == default_ollama_url:
-        host = f"http://{llamacpp_host}:{llamacpp_port}"
+    # Backend auto-discovery (when no explicit backend was chosen by the user)
+    if discover:
+        selected_backend, selected_host, selected_model = _auto_select_backend(cfg)
+        backend = selected_backend
+        host = selected_host
+        model = selected_model
+
+        # Clear old-style llamacpp_* values — the new discovery handles everything
+        llamacpp_host = "127.0.0.1"
+        llamacpp_port = 8080
+    else:
+        # Build the llamacpp endpoint URL — only when host wasn't explicitly set
+        default_ollama_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+        if backend == "llamacpp" and host == default_ollama_url:
+            host = f"http://{llamacpp_host}:{llamacpp_port}"
 
     workspace = os.path.join(_USERDATA, "project-x")
     os.makedirs(workspace, exist_ok=True)

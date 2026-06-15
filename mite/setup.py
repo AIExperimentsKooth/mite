@@ -356,6 +356,126 @@ def check_llamacpp_endpoint(host: str = "0.0.0.0", port: int = 8080) -> bool:
         return False
 
 
+# ---------------------------------------------------------------------------
+# Backend discovery — find running backends and their model lists
+# ---------------------------------------------------------------------------
+
+def _probe_ollama_models() -> list | None:
+    """Fetch Ollama model list from localhost:11434. Returns list of model names or None."""
+    try:
+        req = urllib.request.Request("http://localhost:11434/api/tags")
+        resp = urllib.request.urlopen(req, timeout=3)
+        data = json.loads(resp.read())
+        models = data.get("models", [])
+        names = [m.get("name", "") for m in models if m.get("name")]
+        return names if names else None
+    except Exception:
+        return None
+
+
+def _probe_openai_models(host: str, port: int) -> list | None:
+    """Fetch model list from an OpenAI-compatible /v1/models endpoint. Returns list or None."""
+    try:
+        url = f"http://{host}:{port}/v1/models"
+        req = urllib.request.Request(url)
+        resp = urllib.request.urlopen(req, timeout=3)
+        data = json.loads(resp.read())
+        models = data.get("data", [])
+        names = [m.get("id", "") for m in models if m.get("id")]
+        return names if names else None
+    except Exception:
+        return None
+
+
+# Common ports for OpenAI-compatible servers (LLMStudio, llama.cpp, etc.)
+_OPENAI_PORTS = [
+    (1234, "LLMStudio / LM Studio"),
+    (8080, "llama.cpp"),
+    (8000, "Generic OpenAI"),
+    (11434, "Ollama (OpenAI compat)"),
+    (5000, "Generic"),
+    (3000, "Generic"),
+    (8081, "llama.cpp (alt)"),
+]
+
+
+def discover_backends(custom_hosts: list[str] | None = None) -> list[dict]:
+    """Scan for accessible LLM backends and return their model lists.
+
+    Returns a list of dicts:
+        [
+            {
+                "backend": "ollama",
+                "host": "http://localhost:11434",
+                "models": ["qwen2.5:0.5b", ...]
+            },
+            {
+                "backend": "llamacpp",
+                "host": "http://localhost:1234",
+                "models": ["model-id", ...]
+            },
+        ]
+
+    Checks Ollama's native API, common OpenAI-compatible ports,
+    and any custom hosts the user has configured.
+    """
+    found: list[dict] = []
+    _found_hosts: set[str] = set()  # track already-discovered hosts to avoid duplicates
+
+    # 1) Probe Ollama (native API)
+    ollama_models = _probe_ollama_models()
+    if ollama_models:
+        found.append({
+            "backend": "ollama",
+            "host": "http://localhost:11434",
+            "models": ollama_models,
+        })
+        _found_hosts.add("127.0.0.1:11434")
+        _found_hosts.add("localhost:11434")
+
+    # 2) Probe common OpenAI-compatible ports
+    probed_ports = set()
+    for port, label in _OPENAI_PORTS:
+        if port in probed_ports:
+            continue
+        probed_ports.add(port)
+        # Skip ports already covered by native discovery
+        host_key = f"127.0.0.1:{port}"
+        if host_key in _found_hosts:
+            continue
+        models = _probe_openai_models("127.0.0.1", port)
+        if models:
+            found.append({
+                "backend": "llamacpp",
+                "host": f"http://127.0.0.1:{port}",
+                "models": models,
+            })
+            _found_hosts.add(host_key)
+
+    # 3) Probe custom hosts from config
+    if custom_hosts:
+        for entry in custom_hosts:
+            # entry format: "backend_name|http://host:port" or just "http://host:port"
+            if "|" in entry:
+                parts = entry.split("|", 1)
+                host_url = parts[1]
+            else:
+                host_url = entry
+            # Parse hostname and port from the URL
+            from urllib.parse import urlparse
+            parsed = urlparse(host_url)
+            if parsed.hostname and parsed.port:
+                models = _probe_openai_models(parsed.hostname, parsed.port)
+                if models:
+                    found.append({
+                        "backend": "llamacpp",
+                        "host": host_url,
+                        "models": models,
+                    })
+
+    return found
+
+
 def verify_llamacpp(host: str = "0.0.0.0", port: int = 8080):
     """Quick test: verify llama.cpp server responds."""
     server_url = f"http://{host}:{port}"
