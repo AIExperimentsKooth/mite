@@ -182,7 +182,11 @@ def _auto_load_conversation():
 # ---------------------------------------------------------------------------
 
 def _load_agent_md():
-    """Load AGENT.md from workspace directory or ~/.mite/."""
+    """Load AGENT.md from workspace directory or ~/.mite/.
+
+    Falls back to ~/.mite/AGENT.md as the default (auto-created with
+    a starter template if none exists at any candidate path).
+    """
     candidates = [
         os.path.join(os.getcwd(), "AGENT.md"),
         os.path.join(os.path.dirname(os.getcwd()), "AGENT.md"),
@@ -192,7 +196,30 @@ def _load_agent_md():
         if os.path.exists(path):
             with open(path) as f:
                 return f.read().strip()
-    return None
+    # No AGENT.md found anywhere — create default at ~/.mite/AGENT.md
+    default_path = os.path.join(_USERDATA, "AGENT.md")
+    _DEFAULT_AGENT_MD = """# AGENT.md — Project Instructions for Mite
+
+Customize this file with project-specific instructions for the AI agent.
+Keep it under 20 lines — tiny models can't parse long text.
+
+## Language / Framework
+- Primary language: Python
+- Test framework: pytest
+- Linter: ruff
+
+## Conventions
+- Use snake_case, type hints, and pathlib.Path
+- Prefer stdlib over external dependencies
+
+## Workflow
+- Write tests first (TDD), run `pytest -q` before finish
+- Keep functions under 40 lines
+- New files go under `src/`
+"""
+    with open(default_path, "w") as f:
+        f.write(_DEFAULT_AGENT_MD)
+    return _DEFAULT_AGENT_MD
 
 
 # ---------------------------------------------------------------------------
