@@ -1455,6 +1455,12 @@ def _process_user_task(user_input, system_prompt, messages, model, host, history
             return False
 
         tool_result = _parse_tool_call(model_reply)
+
+        # Always print the model's full reply so the user sees what the
+        # model said — preamble, tool calls, and everything in between.
+        if not sched_task_mode:
+            print(f"\n  \U0001f916 {model_reply}")
+
         if tool_result:
             name, args = tool_result
             no_tool_count = 0
@@ -1499,7 +1505,11 @@ def _process_user_task(user_input, system_prompt, messages, model, host, history
                 short = result_text[:200]
                 print(f"    {short}")
 
-            messages.append({"role": "user", "content": f"[Tool result: {name}]\n{result_text[:500]}"})
+            messages.append({
+                "role": "user",
+                "content": f"[Tool result: {name}] ({len(result_text)} chars)\n{result_text[:8000]}"
+                        + ("" if len(result_text) <= 8000 else "\n[... output truncated — only showing first 8000 chars ...]")
+            })
             auto_steps += 1
 
             if auto_steps >= max_auto_steps:
@@ -1537,7 +1547,6 @@ def _process_user_task(user_input, system_prompt, messages, model, host, history
             if sched_task_mode:
                 print("  \u26a0 Scheduled task asked a question — aborting.")
                 break
-            print(f"\n  \U0001f916 {model_reply[:200]}")
             break
 
         if sched_task_mode:
@@ -1552,12 +1561,6 @@ def _process_user_task(user_input, system_prompt, messages, model, host, history
             break
 
         # --- Normal (non-scheduled) paths below ---
-
-        # Show the model's non-tool output so the user has visibility
-        # even during auto-continue. Print the full reply (short on first
-        # pass, but always let the user see what the model said).
-        if not sched_task_mode:
-            print(f"\n  \U0001f916 {model_reply[:200]}")
 
         if finish_state == "question":
             if auto_continue and no_tool_count < max_no_tool:
