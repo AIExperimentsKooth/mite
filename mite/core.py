@@ -194,27 +194,9 @@ def _strip_comments(text: str) -> str:
     return "\n".join(stripped).strip()
 
 
-def _load_agent_md():
-    """Load AGENT.md from workspace directory or ~/.mite/.
-
-    Falls back to ~/.mite/AGENT.md as the default (auto-created with
-    a starter template if none exists at any candidate path).
-
-    Lines starting with '# ' are stripped — they are comments visible
-    to the user but not served to the LLM.
-    """
-    candidates = [
-        os.path.join(os.getcwd(), "AGENT.md"),
-        os.path.join(os.path.dirname(os.getcwd()), "AGENT.md"),
-        os.path.join(_USERDATA, "AGENT.md"),
-    ]
-    for path in candidates:
-        if os.path.exists(path):
-            with open(path) as f:
-                return _strip_comments(f.read())
-    # No AGENT.md found anywhere — create default at ~/.mite/AGENT.md
-    default_path = os.path.join(_USERDATA, "AGENT.md")
-    _DEFAULT_AGENT_MD = """# AGENT.md — Project Instructions for Mite
+# Default AGENT.md template — kept at module level so _write_default_agent_md
+# (called from the update path in cli.py) always writes the latest version.
+_DEFAULT_AGENT_MD = """# AGENT.md — Project Instructions for Mite
 
 Customize this file for your project. Keep it under 20 lines.
 
@@ -246,9 +228,43 @@ Customize this file for your project. Keep it under 20 lines.
 # Teacher: explain why before each step, compare alternatives,
 #   summarize what was learned
 """
-    with open(default_path, "w") as f:
+
+
+def _write_default_agent_md():
+    """Write the latest _DEFAULT_AGENT_MD to ~/.mite/AGENT.md.
+
+    Called during first-run setup and after git updates so the template
+    stays in sync with the current code.  Overwrites any customisation —
+    the file is a replaceable starting point.
+    """
+    path = os.path.join(_USERDATA, "AGENT.md")
+    with open(path, "w") as f:
         f.write(_DEFAULT_AGENT_MD)
-    return _strip_comments(_DEFAULT_AGENT_MD)
+
+
+def _load_agent_md():
+    """Load AGENT.md from workspace directory or ~/.mite/.
+
+    Falls back to ~/.mite/AGENT.md as the default (auto-created with
+    a starter template if none exists at any candidate path).
+
+    Lines starting with '# ' are stripped — they are comments visible
+    to the user but not served to the LLM.
+    """
+    candidates = [
+        os.path.join(os.getcwd(), "AGENT.md"),
+        os.path.join(os.path.dirname(os.getcwd()), "AGENT.md"),
+        os.path.join(_USERDATA, "AGENT.md"),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            with open(path) as f:
+                return _strip_comments(f.read())
+    # No AGENT.md found anywhere — create default at ~/.mite/AGENT.md
+    _write_default_agent_md()
+    default_path = os.path.join(_USERDATA, "AGENT.md")
+    with open(default_path) as f:
+        return _strip_comments(f.read())
 
 
 # ---------------------------------------------------------------------------

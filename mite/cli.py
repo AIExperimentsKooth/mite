@@ -215,6 +215,10 @@ def _run_update(auto_confirm: bool = False, branch: str = "main"):
         cmd.append("--yes")
     try:
         subprocess.run(cmd, check=True)
+        # Update the AGENT.md template to match the freshly-fetched code
+        from . import core as mite_core
+        mite_core._write_default_agent_md()
+        print("  \u2713 AGENT.md template refreshed")
     except subprocess.CalledProcessError as e:
         print(f"\n  \u26a0 Update failed (exit code {e.returncode}).")
         print("  Your ~/.mite/ userdata was backed up and restored automatically.")
