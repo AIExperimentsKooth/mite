@@ -181,11 +181,25 @@ def _auto_load_conversation():
 # AGENT.md
 # ---------------------------------------------------------------------------
 
+def _strip_comments(text: str) -> str:
+    """Remove lines starting with ';;' from AGENT.md content.
+
+    Leaves markdown headings (#, ##, etc.) intact — ';;' is unambiguous
+    and won't collide with any markdown syntax.
+    """
+    lines = text.splitlines()
+    stripped = [line for line in lines if not line.startswith(";;")]
+    return "\n".join(stripped).strip()
+
+
 def _load_agent_md():
     """Load AGENT.md from workspace directory or ~/.mite/.
 
     Falls back to ~/.mite/AGENT.md as the default (auto-created with
     a starter template if none exists at any candidate path).
+
+    Lines starting with ';;' are stripped — they are comments visible
+    to the user but not served to the LLM.
     """
     candidates = [
         os.path.join(os.getcwd(), "AGENT.md"),
@@ -195,7 +209,7 @@ def _load_agent_md():
     for path in candidates:
         if os.path.exists(path):
             with open(path) as f:
-                return f.read().strip()
+                return _strip_comments(f.read())
     # No AGENT.md found anywhere — create default at ~/.mite/AGENT.md
     default_path = os.path.join(_USERDATA, "AGENT.md")
     _DEFAULT_AGENT_MD = """# AGENT.md — Project Instructions for Mite
@@ -219,15 +233,15 @@ Customize this file for your project. Keep it under 20 lines.
 - Conservative: explain the plan first, never overwrite without asking,
   roll back on errors instead of compounding them
 
-# To switch personality, comment out the block above and uncomment one below:
-# Aggressive: minimal explanations, edit in place, one-shot fixes
-# TDD Purist: no code without a failing test, run full suite after each change
-# Minimalist: prefer shell over write_file, shortest path to done
-# Teacher: explain why before each step, compare alternatives, summarize
+;; To switch personality, comment out the block above and uncomment one below:
+;; Aggressive: minimal explanations, edit in place, one-shot fixes
+;; TDD Purist: no code without a failing test, run full suite after each change
+;; Minimalist: prefer shell over write_file, shortest path to done
+;; Teacher: explain why before each step, compare alternatives, summarize
 """
     with open(default_path, "w") as f:
         f.write(_DEFAULT_AGENT_MD)
-    return _DEFAULT_AGENT_MD
+    return _strip_comments(_DEFAULT_AGENT_MD)
 
 
 # ---------------------------------------------------------------------------
