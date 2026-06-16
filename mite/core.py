@@ -1519,6 +1519,16 @@ def _process_user_task(user_input, system_prompt, messages, model, host, history
 
         no_tool_count += 1
 
+        # If the model ends with '?', it's asking the user something —
+        # stop auto-continue and return control to the user.
+        model_text = model_reply.strip()
+        if model_text.endswith("?"):
+            if sched_task_mode:
+                print("  \u26a0 Scheduled task asked a question — aborting.")
+                break
+            print(f"\n  \U0001f916 {model_reply[:200]}")
+            break
+
         if sched_task_mode:
             if finish_state == "question" or no_tool_count < max_no_tool:
                 messages.append({"role": "user", "content": prompts.CONTINUE_PROMPT})
