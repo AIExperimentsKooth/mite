@@ -200,22 +200,30 @@ def _load_agent_md():
     default_path = os.path.join(_USERDATA, "AGENT.md")
     _DEFAULT_AGENT_MD = """# AGENT.md — Project Instructions for Mite
 
-Customize this file with project-specific instructions for the AI agent.
-Keep it under 20 lines — tiny models can't parse long text.
+Customize this file for your project. Keep it under 20 lines.
 
-## Language / Framework
-- Primary language: Python
-- Test framework: pytest
-- Linter: ruff
+## Project
+- Language: Python
+- Tests: pytest
+- Lint: ruff
 
 ## Conventions
-- Use snake_case, type hints, and pathlib.Path
-- Prefer stdlib over external dependencies
+- snake_case, type hints, pathlib, stdlib first
 
 ## Workflow
-- Write tests first (TDD), run `pytest -q` before finish
-- Keep functions under 40 lines
-- New files go under `src/`
+- TDD: tests before code, `pytest -q` before finish
+- Functions ≤40 lines
+- New files under `src/`
+
+## Personality
+- Conservative: explain the plan first, never overwrite without asking,
+  roll back on errors instead of compounding them
+
+# To switch personality, comment out the block above and uncomment one below:
+# Aggressive: minimal explanations, edit in place, one-shot fixes
+# TDD Purist: no code without a failing test, run full suite after each change
+# Minimalist: prefer shell over write_file, shortest path to done
+# Teacher: explain why before each step, compare alternatives, summarize
 """
     with open(default_path, "w") as f:
         f.write(_DEFAULT_AGENT_MD)
