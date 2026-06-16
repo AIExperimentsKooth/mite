@@ -545,7 +545,7 @@ def _call_llm(model, messages, host="http://localhost:11434", timeout=300, backe
             "messages": messages,
             "stream": False,
             "options": {
-                "num_predict": -2,
+                "num_predict": -1,
                 "temperature": 0.2,
                 "top_p": 0.9,
             }
