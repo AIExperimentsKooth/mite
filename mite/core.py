@@ -1026,12 +1026,17 @@ def _auto_select_backend(cfg: dict) -> tuple:
 
 def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=None,
              auto_continue=None, model_timeout=None, stuck_threshold=None, backend=None, debug=None,
-             llamacpp_host=None, llamacpp_port=None, initial_task=None, discover=True):
+             llamacpp_host=None, llamacpp_port=None, initial_task=None, discover=True,
+             workdir=None):
     """Run the interactive mite loop.
 
     Config values are loaded from ~/.mite/config.json first, then explicit
     CLI/function-arg values override them.  Pass None for a key to defer to
     the config file (or its built-in default).
+
+    workdir: working directory for the session.  Defaults to
+    ~/.mite/project-x/.  Can also be set with the MITE_WORKDIR env var
+    or the 'workdir' key in ~/.mite/config.json.
 
     When discover=True and no explicit backend is set, scans for accessible
     LLM backends (Ollama, LLMStudio, llama.cpp, etc.) and prompts the user
@@ -1053,6 +1058,16 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=N
     llamacpp_host = cfgl.get("llamacpp_host", "0.0.0.0") if llamacpp_host is None else llamacpp_host
     llamacpp_port = int(cfgl.get("llamacpp_port", 8080)) if llamacpp_port is None else llamacpp_port
 
+    # Resolve workdir: CLI arg → env var → config file → default
+    if workdir is None:
+        workdir = (
+            os.environ.get("MITE_WORKDIR")
+            or cfgl.get("workdir")
+        )
+    if not workdir:
+        workdir = os.path.join(_USERDATA, "project-x")
+    workdir = os.path.abspath(workdir)
+
     # Backend auto-discovery (when no explicit backend was chosen by the user)
     if discover:
         selected_backend, selected_host, selected_model = _auto_select_backend(cfg)
@@ -1069,7 +1084,7 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=N
         if backend == "llamacpp" and host == default_ollama_url:
             host = f"http://{llamacpp_host}:{llamacpp_port}"
 
-    workspace = os.path.join(_USERDATA, "project-x")
+    workspace = workdir
     os.makedirs(workspace, exist_ok=True)
     os.chdir(workspace)
 

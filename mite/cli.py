@@ -20,6 +20,7 @@ Examples:
   mite --update --dev            Update from the dev branch
   mite --no-auto-continue      Disable auto-continue (wait after every step)
   mite --no-sysinfo             Skip system information report
+  mite --dir /path/to/project   Set working directory (env: MITE_WORKDIR)
         """
     )
     parser.add_argument("task", nargs="?", help="Task to execute (omit for interactive mode)")
@@ -57,6 +58,8 @@ Examples:
                         help="Set the llama.cpp server port (default: 8080)")
     parser.add_argument("--llamacpp-host", default=None,
                         help="Set the llama.cpp server bind host (default: 0.0.0.0)")
+    parser.add_argument("--dir", "-d", default=None,
+                        help="Working directory (default: ~/.mite/project-x, env: MITE_WORKDIR)")
     args = parser.parse_args()
     if args.version:
         print(f"Mite v{__version__}")
@@ -98,6 +101,7 @@ Examples:
             llamacpp_host=args.llamacpp_host,
             llamacpp_port=args.port,
             discover=use_discovery,
+            workdir=args.dir,
         )
     except KeyboardInterrupt:
         print("\n  Interrupted.")
