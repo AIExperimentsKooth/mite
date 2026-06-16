@@ -704,8 +704,8 @@ def _parse_tool_call(text):
     if result:
         return result
 
-    # Strategy 2: TOOL name(args) or TOOL: name(args)
-    m = re.match(r"^TOOL\s*:?\s*(\w+)\((.+)\)", text)
+    # Strategy 2: TOOL name(args) or TOOL: name(args) — find anywhere
+    m = re.search(r"TOOL\s*:?\s*(\w+)\((.+)\)", text)
     if m:
         name = m.group(1).lower()
         if name in _TOOL_ALIASES:
@@ -714,8 +714,8 @@ def _parse_tool_call(text):
         args = _parse_args_singleline(args_raw)
         return (name, args)
 
-    # Strategy 3: just name(args) -- no TOOL prefix
-    m = re.match(r"^(\w+)\((.+)\)", text)
+    # Strategy 3: just name(args) — no TOOL prefix, find anywhere
+    m = re.search(r"(\w+)\((.+)\)", text)
     if m:
         name = m.group(1).lower()
         if name in _TOOL_ALIASES:
@@ -725,8 +725,19 @@ def _parse_tool_call(text):
         if name in _TOOLS:
             return (name, args)
 
-    # Strategy 4: TOOL name key=val key=val (no parens)
-    m = re.match(r"^TOOL\s*:?\s*(\w+)\s+(.+)", text)
+    # Strategy 4: TOOL name key=val key=val (no parens) — find anywhere
+    m = re.search(r"TOOL\s*:?\s*(\w+)\s+(.+)", text)
+    if m:
+        name = m.group(1).lower()
+        if name in _TOOL_ALIASES:
+            name = _TOOL_ALIASES[name]
+        args_raw = m.group(2)
+        args = _parse_args_singleline(args_raw)
+        if name in _TOOLS:
+            return (name, args)
+
+    # Strategy 5: bare name key=val (no TOOL, no parens) — lenient, find anywhere
+    m = re.search(r"(\w+)\s+(.+)", text)
     if m:
         name = m.group(1).lower()
         if name in _TOOL_ALIASES:
