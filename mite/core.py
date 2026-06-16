@@ -1333,6 +1333,8 @@ def _process_user_task(user_input, system_prompt, messages, model, host, history
     no_tool_count = 0
     max_no_tool = stuck_threshold
     force_prompt_sent = False
+    _tool_fingerprints = []  # sliding window of tool call fingerprints — (name, frozenset(sorted(args)))
+    _loop_warning_sent = False  # true once we've warned about a tool loop
     from . import prompts  # import once
 
     while True:
@@ -1421,6 +1423,25 @@ def _process_user_task(user_input, system_prompt, messages, model, host, history
                 how = "scheduled task" if sched_task_mode else "auto-steps"
                 print(f"  \u26a0 Hit max {how} ({max_auto_steps}). Stopping.")
                 break
+
+            # Tool-call fingerprint dedup — detect when model calls the same
+            # tool with identical arguments 3+ times in a row (common with
+            # sub-1B models that pattern-match their way into loops).
+            fp = (name, frozenset(sorted(args.items())))
+            _tool_fingerprints.append(fp)
+            _tool_fingerprints = _tool_fingerprints[-3:]
+
+            if len(_tool_fingerprints) == 3 and len(set(_tool_fingerprints)) == 1:
+                if not _loop_warning_sent:
+                    _loop_warning_sent = True
+                    print(f"  \u26a0 Tool loop: {name} called 3\u00d7 with same args")
+                    auto_steps += 1
+                    messages.append({"role": "user", "content": prompts.LOOP_PROMPT})
+                    continue
+                else:
+                    # Warning was already sent — the model didn't break out
+                    print(f"  \u26a0 Tool loop persists ({name}). Breaking.")
+                    break
 
             continue
 
