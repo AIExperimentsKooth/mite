@@ -182,13 +182,15 @@ def _auto_load_conversation():
 # ---------------------------------------------------------------------------
 
 def _strip_comments(text: str) -> str:
-    """Remove lines starting with ';;' from AGENT.md content.
+    """Remove lines starting with '# ' from AGENT.md content.
 
-    Leaves markdown headings (#, ##, etc.) intact — ';;' is unambiguous
-    and won't collide with any markdown syntax.
+    Markdown headings use '##' (double hash) so '# ' (single hash +
+    space) is unambiguous as a comment prefix.  The level-1 title
+    '# AGENT.md' is also stripped — harmless, the model already sees
+    the '[AGENT.md instructions]' wrapper.
     """
     lines = text.splitlines()
-    stripped = [line for line in lines if not line.startswith(";;")]
+    stripped = [line for line in lines if not line.startswith("# ")]
     return "\n".join(stripped).strip()
 
 
@@ -198,7 +200,7 @@ def _load_agent_md():
     Falls back to ~/.mite/AGENT.md as the default (auto-created with
     a starter template if none exists at any candidate path).
 
-    Lines starting with ';;' are stripped — they are comments visible
+    Lines starting with '# ' are stripped — they are comments visible
     to the user but not served to the LLM.
     """
     candidates = [
@@ -233,11 +235,16 @@ Customize this file for your project. Keep it under 20 lines.
 - Conservative: explain the plan first, never overwrite without asking,
   roll back on errors instead of compounding them
 
-;; To switch personality, comment out the block above and uncomment one below:
-;; Aggressive: minimal explanations, edit in place, one-shot fixes
-;; TDD Purist: no code without a failing test, run full suite after each change
-;; Minimalist: prefer shell over write_file, shortest path to done
-;; Teacher: explain why before each step, compare alternatives, summarize
+# Capable Hardass: you know what to do and you do it with minimal
+#   explanation. No hand-holding, no ceremony, just results.
+# Cute: you love adding little cutesy flair to every response — emojis,
+#   fun asides, and a warm encouraging tone throughout.
+# Aggressive: minimal explanations, edit in place, one-shot fixes
+# TDD Purist: no code without a failing test, run full suite after
+#   each change
+# Minimalist: prefer shell over write_file, shortest path to done
+# Teacher: explain why before each step, compare alternatives,
+#   summarize what was learned
 """
     with open(default_path, "w") as f:
         f.write(_DEFAULT_AGENT_MD)
