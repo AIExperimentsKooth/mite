@@ -9,20 +9,13 @@ import platform
 import getpass
 import atexit
 
-# ---------------------------------------------------------------------------
-# History / readline
-# ---------------------------------------------------------------------------
-
-_HISTFILE = os.path.expanduser("~/.mite/history")
-_HISTFILE_MAX = 100
-
 
 def _setup_readline():
     """Enable readline arrow-key history if available."""
     try:
         import readline
 
-        histfile = _HISTFILE
+        histfile = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "history")
         try:
             readline.read_history_file(histfile)
             readline.set_history_length(_HISTFILE_MAX)
@@ -67,10 +60,16 @@ def _show_help():
 
 
 # ---------------------------------------------------------------------------
-# User data directory
+# Mite root directory
 # ---------------------------------------------------------------------------
+# Everything lives inside the mite install folder so the tool is fully
+# portable — each git clone is a self-contained instance with its own
+# config, conversations, queue, schedule, and workspace.
 
-_USERDATA = os.path.expanduser("~/.mite")
+_MITE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_HISTFILE = os.path.join(_MITE_ROOT, "history")
+_HISTFILE_MAX = 100
+_USERDATA = _MITE_ROOT
 _CONV_DIR = os.path.join(_USERDATA, "conversations")
 _CONFIG_PATH = os.path.join(_USERDATA, "config.json")
 _QUEUE_PATH = os.path.join(_USERDATA, "queue.json")
@@ -231,7 +230,7 @@ Customize this file for your project. Keep it under 20 lines.
 
 
 def _write_default_agent_md():
-    """Write the latest _DEFAULT_AGENT_MD to ~/.mite/AGENT.md.
+    """Write the latest _DEFAULT_AGENT_MD to [mite-root]/AGENT.md.
 
     Called during first-run setup and after git updates so the template
     stays in sync with the current code.  Overwrites any customisation —
@@ -243,9 +242,9 @@ def _write_default_agent_md():
 
 
 def _load_agent_md():
-    """Load AGENT.md from workspace directory or ~/.mite/.
+    """Load AGENT.md from workspace directory or [mite-root]/.
 
-    Falls back to ~/.mite/AGENT.md as the default (auto-created with
+    Falls back to [mite-root]/AGENT.md as the default (auto-created with
     a starter template if none exists at any candidate path).
 
     Lines starting with '# ' are stripped — they are comments visible
@@ -260,7 +259,7 @@ def _load_agent_md():
         if os.path.exists(path):
             with open(path) as f:
                 return _strip_comments(f.read())
-    # No AGENT.md found anywhere — create default at ~/.mite/AGENT.md
+    # No AGENT.md found anywhere — create default at [mite-root]/AGENT.md
     _write_default_agent_md()
     default_path = os.path.join(_USERDATA, "AGENT.md")
     with open(default_path) as f:
@@ -1030,13 +1029,13 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=N
              workdir=None):
     """Run the interactive mite loop.
 
-    Config values are loaded from ~/.mite/config.json first, then explicit
+    Config values are loaded from [mite-root]/config.json first, then explicit
     CLI/function-arg values override them.  Pass None for a key to defer to
     the config file (or its built-in default).
 
     workdir: working directory for the session.  Defaults to
-    ~/.mite/project-x/.  Can also be set with the MITE_WORKDIR env var
-    or the 'workdir' key in ~/.mite/config.json.
+    [mite-root]/workspace/.  Can also be set with the MITE_WORKDIR env var
+    or the 'workdir' key in [mite-root]/config.json.
 
     When discover=True and no explicit backend is set, scans for accessible
     LLM backends (Ollama, LLMStudio, llama.cpp, etc.) and prompts the user
@@ -1065,7 +1064,7 @@ def run_loop(model="qwen2.5:0.5b", host="http://localhost:11434", show_sysinfo=N
             or cfgl.get("workdir")
         )
     if not workdir:
-        workdir = os.path.join(_USERDATA, "project-x")
+        workdir = os.path.join(_MITE_ROOT, "workspace")
     workdir = os.path.abspath(workdir)
 
     # Backend auto-discovery (when no explicit backend was chosen by the user)

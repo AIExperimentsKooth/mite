@@ -2,11 +2,11 @@
 # ============================================================================
 # Mite Update Script
 # ============================================================================
-# Backs up userdata (~/.mite/), fetches the latest code from GitHub, restores
-# userdata, and re-runs setup.
+# Fetches the latest code from GitHub and re-runs setup.
 #
-# Preserved userdata (full ~/.mite/ directory):
-#   config.json, AGENT.md, conversations/, queue.json, schedule.json
+# Userdata (config, conversations, queue, schedule) lives inside the mite
+# install directory.  These files are in .gitignore so git reset --hard
+# preserves them automatically — no separate backup/restore needed.
 #
 # Usage:
 #   bash update.sh                  # Interactive
@@ -23,26 +23,9 @@ BRANCH="main"
 
 # --- Helpers ---------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TIMESTAMP=$(date +%s)
-BACKUP_DIR="/tmp/mite-backup-${TIMESTAMP}"
 DRY_RUN=false
 AUTO_CONFIRM=false
 INSTALL_DIR=""
-
-# Cleanup trap: restore backup on unexpected failure
-_cleanup() {
-    local exit_code=$?
-    if [ $exit_code -ne 0 ] && [ -d "$BACKUP_DIR" ] && [ -z "$DRY_RUN" ]; then
-        echo
-        err "Update failed (exit $exit_code). Restoring backup..."
-        if [ -d "$HOME/.mite" ]; then
-            rm -rf "$HOME/.mite"
-        fi
-        cp -r "$BACKUP_DIR" "$HOME/.mite"
-        ok "~/.mite/ restored from backup"
-    fi
-}
-trap _cleanup EXIT
 
 # Color helpers
 BOLD='\033[1m'
@@ -91,30 +74,14 @@ header "Mite Update Script"
 echo "  Repo:       $REPO_URL"
 echo "  Branch:     $BRANCH"
 echo "  Install:    $INSTALL_DIR"
-echo "  Userdata:   $HOME/.mite/ (config, AGENT.md, conversations, queue, schedule)"
 
 if $DRY_RUN; then
     echo
     info "${BOLD}[DRY RUN]${NC} No changes will be made."
 fi
 
-# --- Step 1: Backup userdata ------------------------------------------------
-header "Step 1: Backup userdata (~/.mite/)"
-
-if [ -d "$HOME/.mite" ]; then
-    if $DRY_RUN; then
-        info "Would backup ~/.mite/ \u2192 $BACKUP_DIR"
-    else
-        info "Backing up ~/.mite/..."
-        cp -r "$HOME/.mite" "$BACKUP_DIR"
-        ok "Backed up to $BACKUP_DIR"
-    fi
-else
-    info "No ~/.mite/ found \u2014 nothing to back up."
-fi
-
-# --- Step 2: Confirm --------------------------------------------------------
-header "Step 2: Confirm update"
+# --- Step 1: Confirm --------------------------------------------------------
+header "Step 1: Confirm update"
 
 if ! $AUTO_CONFIRM; then
     if $DRY_RUN; then
@@ -125,7 +92,6 @@ if ! $AUTO_CONFIRM; then
         else
             echo "  This will update Mite at: ${INSTALL_DIR}"
         fi
-        echo "  Existing ~/.mite/ userdata will be preserved."
         read -r -p "  Continue? [Y/n]: " REPLY
         if [[ "$REPLY" =~ ^[Nn] ]]; then
             warn "Update cancelled."
@@ -134,8 +100,8 @@ if ! $AUTO_CONFIRM; then
     fi
 fi
 
-# --- Step 3: Fetch latest code ---------------------------------------------
-header "Step 3: Fetch latest code"
+# --- Step 2: Fetch latest code ---------------------------------------------
+header "Step 2: Fetch latest code"
 
 fetch_via_git() {
     local dir="$1"
@@ -252,29 +218,8 @@ if ! $FRESH_INSTALL && ! $DRY_RUN; then
     fi
 fi
 
-# --- Step 4: Restore userdata ----------------------------------------------
-header "Step 4: Restore userdata (~/.mite/)"
-
-if [ -d "$BACKUP_DIR" ] && [ -d "$HOME/.mite" ]; then
-    if $DRY_RUN; then
-        info "Would restore ~/.mite/ from backup"
-    else
-        info "Restoring ~/.mite/ from backup (config, AGENT.md, conversations, queue, schedule)..."
-        rsync -a "$BACKUP_DIR/" "$HOME/.mite/"
-        ok "Userdata restored"
-    fi
-elif [ -d "$BACKUP_DIR" ]; then
-    if $DRY_RUN; then
-        info "Would restore ~/.mite/ from $BACKUP_DIR"
-    else
-        info "Restoring ~/.mite/ from $BACKUP_DIR (config, AGENT.md, conversations, queue, schedule)..."
-        cp -r "$BACKUP_DIR" "$HOME/.mite"
-        ok "Userdata restored"
-    fi
-fi
-
-# --- Step 5: Run setup -----------------------------------------------------
-header "Step 5: Run setup"
+# --- Step 3: Run setup -----------------------------------------------------
+header "Step 3: Run setup"
 
 if $DRY_RUN; then
     info "Would run: cd $INSTALL_DIR && bash setup.sh"
@@ -289,8 +234,8 @@ else
     fi
 fi
 
-# --- Step 6: Ensure CLI is in PATH -----------------------------------------
-header "Step 6: Ensure 'mite' command"
+# --- Step 4: Ensure CLI is in PATH -----------------------------------------
+header "Step 4: Ensure 'mite' command"
 
 if $DRY_RUN; then
     info "Would ensure 'mite' is in PATH"
@@ -324,11 +269,5 @@ else
     ok "${BOLD}Mite is up to date!${NC}"
     echo "  Run:  mite"
     echo "  Or:   cd $INSTALL_DIR && python -m mite"
-
-    # Clean up backup if everything went well
-    if [ -d "$BACKUP_DIR" ] && [ -d "$HOME/.mite" ]; then
-        info "Backup preserved at: $BACKUP_DIR"
-        info "Remove with: rm -rf $BACKUP_DIR"
-    fi
 fi
 echo

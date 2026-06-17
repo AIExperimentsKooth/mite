@@ -56,8 +56,8 @@ def _llamacpp_importable() -> bool:
 
 
 def _has_gguf_model() -> bool:
-    """Check if any GGUF file exists in ~/.mite/llamacpp/models/."""
-    gguf_dir = os.path.expanduser("~/.mite/llamacpp/models")
+    """Check if any GGUF file exists in [mite-root]/llamacpp/models/."""
+    gguf_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "llamacpp", "models")
     if not os.path.isdir(gguf_dir):
         return False
     for f in os.listdir(gguf_dir):
@@ -131,5 +131,5 @@ llamacpp_installed = pytest.mark.skipif(
 
 llamacpp_model_available = pytest.mark.skipif(
     not _has_gguf_model(),
-    reason="No GGUF model file in ~/.mite/llamacpp/models/"
+    reason="No GGUF model file in [mite-root]/llamacpp/models/"
 )

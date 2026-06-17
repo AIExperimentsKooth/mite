@@ -3,4 +3,12 @@
 __pycache__/
 *.pyc
 .env
-.mite/
+
+# Runtime-generated data files (self-contained instance state)
+/config.json
+/conversations/
+/queue.json
+/schedule.json
+/workspace/
+/history
+/llamacpp/

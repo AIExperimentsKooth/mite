@@ -20,7 +20,7 @@ $ mite "add error handling to main.py"
 - 🔧 **Full tool set** — read, write, edit files, run shell commands, search code
 - 🚀 **Auto-configures** — one command installs everything
 - 💬 **Interactive REPL** — chat-like interface with command history (↑ arrow)
-- 📁 **Userdata directory** — conversations, AGENT.md, and preferences live in `~/.mite/`
+- 📁 **Fully portable** — data, config, conversations live inside the mite install folder. Multiple instances can coexist independently.
 - 💾 **Save & load conversations** — save sessions, resume later
 - ⚙️ **Persistent config** — preferences survive across sessions
 - 📋 **AGENT.md support** — persistent instructions at project or user level
@@ -104,6 +104,7 @@ mite --no-auto-continue
 |----------|---------|-------------|
 | `MITE_MODEL` | `qwen2.5:0.5b` | Default Ollama model |
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama API endpoint |
+| `MITE_WORKDIR` | `[mite-root]/workspace` | Working directory (also `--dir` CLI flag) |
 | `MITE_TOKEN` | — | GitHub token for private repo updates |
 | `GITHUB_TOKEN` | — | Alternative GitHub token for updates |
 
@@ -123,12 +124,11 @@ MITE_TOKEN=*** mite --update
 ```
 
 The update script:
-1. **Backs up** `~/.mite/` (conversations, config, AGENT.md)
-2. **Fetches** the latest code from GitHub
-3. **Restores** your userdata
-4. **Re-runs** setup
+1. **Fetches** the latest code from GitHub
+2. **Re-runs** setup
 
-On failure, it automatically restores the backup. No data loss.
+Data files (config, conversations, queue, schedule) live inside the mite install
+directory in `.gitignore` — `git reset --hard` preserves them automatically.
 
 ### Interactive Commands
 
@@ -139,7 +139,7 @@ On failure, it automatically restores the backup. No data loss.
 | `/history` | Show recent conversation |
 | `/model <name>` | Switch models mid-session |
 | `/agent` | Show current AGENT.md instructions |
-| `/save <name>` | Save conversation to `~/.mite/conversations/` |
+|| `/save <name>` | Save conversation to `[mite-root]/conversations/` |
 | `/load <name>` | Load a saved conversation |
 | `/list` | List saved conversations |
 | `/config` | Show current preferences |
@@ -222,22 +222,24 @@ When a scheduled task is due, Mite prompts you before running it:
      Run now? [Y/n]
 ```
 
-Queued and scheduled tasks persist in `~/.mite/queue.json` and `~/.mite/schedule.json` — they survive restarts and power loss.
+Queued and scheduled tasks persist in `[mite-root]/queue.json` and `[mite-root]/schedule.json` — they survive restarts and power loss.
 
-### Userdata Directory (`~/.mite/`)
+### Data Files ([mite-root]/)
 
-Mite stores your data in `~/.mite/`:
+Mite stores everything inside its own install directory. Each git clone is a
+fully self-contained instance with independent config, conversations, and task
+state — you can run multiple copies side by side.
 
 | Path | Description |
 |------|-------------|
-| `~/.mite/config.json` | Preferences (show_sysinfo, auto_continue, model_timeout, stuck_threshold) — set via `/config` |
-| `~/.mite/queue.json` | Task queue — managed via `/queue` |
-| `~/.mite/schedule.json` | Scheduled tasks — managed via `/schedule` |
-| `~/.mite/conversations/` | Saved conversations — use `/save` and `/load` |
-| `~/.mite/AGENT.md` | User-level persistent instructions — loaded on every prompt |
-| `~/.mite_history` | Arrow-key command history |
+| `config.json` | Preferences (show_sysinfo, auto_continue, model_timeout, stuck_threshold) — set via `/config` |
+| `queue.json` | Task queue — managed via `/queue` |
+| `schedule.json` | Scheduled tasks — managed via `/schedule` |
+| `conversations/` | Saved conversations — use `/save` and `/load` |
+| `AGENT.md` | Persistent instructions — loaded on every prompt |
+| `workspace/` | Default working directory (change with `--dir` or `MITE_WORKDIR`) |
 
-**AGENT.md priority**: `./AGENT.md` > `./.mite/AGENT.md` > `~/.mite/AGENT.md`
+**AGENT.md priority**: `./AGENT.md` > `[mite-root]/AGENT.md`
 
 Example:
 ```
@@ -247,7 +249,7 @@ Example:
 
 # List saved conversations
 ┃ /list
-  📁 Saved conversations in ~/.mite/conversations/:
+  📁 Saved conversations in [mite-root]/conversations/:
      • my-project-setup
 
 # Load later
@@ -352,7 +354,7 @@ TOOL: write path=config.json content="{\"key\": \"value\"}"
 
 **Output:**
 ```
-OK: Wrote 47 bytes to /home/user/.mite/project-x/hello.txt
+OK: Wrote 47 bytes to /path/to/mite/workspace/hello.txt
 ```
 
 ---

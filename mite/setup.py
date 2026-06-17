@@ -157,8 +157,8 @@ def verify_ollama(model: str):
 # ---------------------------------------------------------------------------
 
 def _llamacpp_dir() -> str:
-    """Get the llama.cpp data directory under ~/.mite/."""
-    d = os.path.join(os.path.expanduser("~"), ".mite", "llamacpp")
+    """Get the llama.cpp data directory under [mite-root]/llamacpp/."""
+    d = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "llamacpp")
     os.makedirs(d, exist_ok=True)
     return d
 
@@ -249,11 +249,11 @@ def resolve_gguf_model(model_spec: str) -> str:
             return model_path
         except Exception as e:
             print(f"  \u26a0 Download failed: {e}")
-            print("  Download manually and place in ~/.mite/llamacpp/models/")
+            print("  Download manually and place in [mite-root]/llamacpp/models/")
             return model_spec  # fall back to using the spec name as-is
 
     print(f"  \u26a0 Unknown model: {model_spec}")
-    print("  Download a GGUF file manually to ~/.mite/llamacpp/models/")
+    print("  Download a GGUF file manually to [mite-root]/llamacpp/models/")
     return model_spec
 
 
@@ -290,7 +290,7 @@ def start_llamacpp(model: str, host: str = "0.0.0.0", port: int = 8080):
     model_path = resolve_gguf_model(model)
     if not os.path.isfile(model_path):
         print(f"  \u26a0 Model file not found: {model_path}")
-        print("  Download a GGUF file to ~/.mite/llamacpp/models/")
+        print("  Download a GGUF file to [mite-root]/llamacpp/models/")
         return False
 
     print(f"  \u23f3 Starting llama.cpp server (model: {os.path.basename(model_path)})...")

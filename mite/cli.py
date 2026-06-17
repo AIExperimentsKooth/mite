@@ -59,7 +59,7 @@ Examples:
     parser.add_argument("--llamacpp-host", default=None,
                         help="Set the llama.cpp server bind host (default: 0.0.0.0)")
     parser.add_argument("--dir", "-d", default=None,
-                        help="Working directory (default: ~/.mite/project-x, env: MITE_WORKDIR)")
+                        help="Working directory (default: [mite-root]/workspace, env: MITE_WORKDIR)")
     args = parser.parse_args()
     if args.version:
         print(f"Mite v{__version__}")
@@ -225,7 +225,6 @@ def _run_update(auto_confirm: bool = False, branch: str = "main"):
         print("  \u2713 AGENT.md template refreshed")
     except subprocess.CalledProcessError as e:
         print(f"\n  \u26a0 Update failed (exit code {e.returncode}).")
-        print("  Your ~/.mite/ userdata was backed up and restored automatically.")
         if e.returncode == 128:
             print()
             print("  This is usually a GitHub authentication issue for private repos.")

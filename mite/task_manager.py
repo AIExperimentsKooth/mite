@@ -1,9 +1,7 @@
 """Task queue and schedule manager for Mite.
 
-Persists task queue and scheduled tasks to ~/.mite/ as JSON files.
-Supports:
-  - Sequential task queue: add tasks, process them one at a time
-  - Scheduled tasks: run tasks at human-readable intervals (e.g. "30m", "1h")
+Persists task queue and scheduled tasks inside the mite install root
+so each instance is fully self-contained.
 """
 
 from __future__ import annotations
@@ -12,9 +10,9 @@ import os
 import time
 import re
 
-_USERDATA_DIR = os.path.expanduser("~/.mite")
-_QUEUE_FILE = os.path.join(_USERDATA_DIR, "queue.json")
-_SCHEDULE_FILE = os.path.join(_USERDATA_DIR, "schedule.json")
+_MITE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_QUEUE_FILE = os.path.join(_MITE_ROOT, "queue.json")
+_SCHEDULE_FILE = os.path.join(_MITE_ROOT, "schedule.json")
 
 
 # --- Interval parsing ---
