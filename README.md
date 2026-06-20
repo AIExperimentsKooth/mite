@@ -139,7 +139,7 @@ directory in `.gitignore` — `git reset --hard` preserves them automatically.
 | `/history` | Show recent conversation |
 | `/model <name>` | Switch models mid-session |
 | `/agent` | Show current AGENT.md instructions |
-|| `/save <name>` | Save conversation to `[mite-root]/conversations/` |
+| `/save <name>` | Save conversation to `[mite-root]/conversations/` |
 | `/load <name>` | Load a saved conversation |
 | `/list` | List saved conversations |
 | `/config` | Show current preferences |
